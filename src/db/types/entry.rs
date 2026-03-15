@@ -103,6 +103,9 @@ impl<'a> Entry {
 
     /// Determines if the entry was modified since the last
     /// history update.
+    ///
+    /// `previous_parent_group` is excluded from the comparison because it is a
+    /// location-tracking field (updated on move) and must not trigger a content change.
     pub(crate) fn has_uncommitted_changes(&self) -> bool {
         if let Some(history) = self.history.as_ref() {
             if history.entries.is_empty() {
@@ -114,10 +117,12 @@ impl<'a> Entry {
             let mut sanitized_entry = self.clone();
             sanitized_entry.times = new_times.clone();
             sanitized_entry.history.take();
+            sanitized_entry.previous_parent_group = None;
 
             let mut last_history_entry = history.entries.first().unwrap().clone();
             last_history_entry.times = new_times.clone();
             last_history_entry.history.take();
+            last_history_entry.previous_parent_group = None;
 
             if sanitized_entry.eq(&last_history_entry) {
                 return false;

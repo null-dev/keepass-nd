@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::db::{Database, Entry, Group, History, Times};
+use crate::db::{Database, Entry, Group, History, Meta, Times};
 use chrono::NaiveDateTime;
 use thiserror::Error;
 use uuid::Uuid;
@@ -79,7 +79,106 @@ impl Database {
         let mut log = MergeLog::default();
         log.append(&self.merge_group(&other.root, false)?);
         log.append(&self.merge_deletions(other)?);
+        self.merge_meta(&other.meta);
         Ok(log)
+    }
+
+    /// Merge the metadata of another database into this database.
+    ///
+    /// Fields with individual timestamps (e.g. `DatabaseNameChanged`) are merged
+    /// by taking whichever value has the more recent timestamp.  Fields that share
+    /// a single `SettingsChanged` bucket timestamp are taken as a group from
+    /// whichever database has the newer bucket timestamp.  `Meta/CustomData` items
+    /// are merged per-item using `CustomDataItem::last_modification_time` (KDBX 4.1).
+    fn merge_meta(&mut self, other: &Meta) {
+        // DatabaseName — governed by DatabaseNameChanged
+        if let Some(other_changed) = other.database_name_changed {
+            let self_changed = self.meta.database_name_changed.unwrap_or_else(Times::epoch);
+            if other_changed > self_changed {
+                self.meta.database_name = other.database_name.clone();
+                self.meta.database_name_changed = Some(other_changed);
+            }
+        }
+
+        // DatabaseDescription — governed by DatabaseDescriptionChanged
+        if let Some(other_changed) = other.database_description_changed {
+            let self_changed = self.meta.database_description_changed.unwrap_or_else(Times::epoch);
+            if other_changed > self_changed {
+                self.meta.database_description = other.database_description.clone();
+                self.meta.database_description_changed = Some(other_changed);
+            }
+        }
+
+        // DefaultUserName — governed by DefaultUserNameChanged
+        if let Some(other_changed) = other.default_username_changed {
+            let self_changed = self.meta.default_username_changed.unwrap_or_else(Times::epoch);
+            if other_changed > self_changed {
+                self.meta.default_username = other.default_username.clone();
+                self.meta.default_username_changed = Some(other_changed);
+            }
+        }
+
+        // RecycleBin — governed by RecycleBinChanged
+        if let Some(other_changed) = other.recyclebin_changed {
+            let self_changed = self.meta.recyclebin_changed.unwrap_or_else(Times::epoch);
+            if other_changed > self_changed {
+                self.meta.recyclebin_enabled = other.recyclebin_enabled;
+                self.meta.recyclebin_uuid = other.recyclebin_uuid;
+                self.meta.recyclebin_changed = Some(other_changed);
+            }
+        }
+
+        // EntryTemplatesGroup — governed by EntryTemplatesGroupChanged
+        if let Some(other_changed) = other.entry_templates_group_changed {
+            let self_changed = self.meta.entry_templates_group_changed.unwrap_or_else(Times::epoch);
+            if other_changed > self_changed {
+                self.meta.entry_templates_group = other.entry_templates_group;
+                self.meta.entry_templates_group_changed = Some(other_changed);
+            }
+        }
+
+        // Settings bucket — governed by SettingsChanged.
+        // Covers: maintenance_history_days, color, master_key_change_rec/force,
+        //         memory_protection, history_max_items/size, last_selected/top_visible_group.
+        if let Some(other_changed) = other.settings_changed {
+            let self_changed = self.meta.settings_changed.unwrap_or_else(Times::epoch);
+            if other_changed > self_changed {
+                self.meta.maintenance_history_days = other.maintenance_history_days;
+                self.meta.color = other.color.clone();
+                self.meta.master_key_change_rec = other.master_key_change_rec;
+                self.meta.master_key_change_force = other.master_key_change_force;
+                self.meta.memory_protection = other.memory_protection.clone();
+                self.meta.history_max_items = other.history_max_items;
+                self.meta.history_max_size = other.history_max_size;
+                self.meta.last_selected_group = other.last_selected_group;
+                self.meta.last_top_visible_group = other.last_top_visible_group;
+                self.meta.settings_changed = Some(other_changed);
+            }
+        }
+
+        // MasterKeyChanged — always take the most recent timestamp
+        if let Some(other_changed) = other.master_key_changed {
+            let self_changed = self.meta.master_key_changed.unwrap_or_else(Times::epoch);
+            if other_changed > self_changed {
+                self.meta.master_key_changed = Some(other_changed);
+            }
+        }
+
+        // CustomData — per-item merge using last_modification_time (KDBX 4.1)
+        for (key, other_item) in &other.custom_data {
+            match self.meta.custom_data.get(key) {
+                None => {
+                    self.meta.custom_data.insert(key.clone(), other_item.clone());
+                }
+                Some(self_item) => {
+                    let self_time = self_item.last_modification_time.unwrap_or_else(Times::epoch);
+                    let other_time = other_item.last_modification_time.unwrap_or_else(Times::epoch);
+                    if other_time > self_time {
+                        self.meta.custom_data.insert(key.clone(), other_item.clone());
+                    }
+                }
+            }
+        }
     }
 
     fn merge_deletions(&mut self, other: &Database) -> Result<MergeLog, MergeError> {
@@ -307,6 +406,11 @@ impl Database {
                 }
 
                 let (merged_entry, entry_merge_log) = existing_entry.merge(other_entry)?;
+
+                // Always propagate warnings (e.g. uncommitted changes) even if the
+                // entry content itself did not change.
+                log.append(&entry_merge_log);
+
                 let Some(merged_entry) = merged_entry else {
                     continue;
                 };
@@ -326,8 +430,6 @@ impl Database {
                     event_type: MergeEventType::EntryUpdated,
                     node_uuid: merged_entry.uuid,
                 });
-
-                log.append(&entry_merge_log);
 
                 // the entry is now merged, we can skip the rest of the loop which is for processing new entries
                 continue;
@@ -446,20 +548,21 @@ impl Database {
         to_parent: Uuid,
         new_location_changed_timestamp: NaiveDateTime,
     ) -> Result<(), MergeError> {
-        let from_parent = self
+        let from_parent_group = self
             .root
             .group_by_uuid_mut(from_parent)
             .ok_or(MergeError::FindGroupError(from_parent))?;
 
-        let mut relocated_entry = from_parent.remove_entry(entry_uuid)?;
+        let mut relocated_entry = from_parent_group.remove_entry(entry_uuid)?;
         relocated_entry.times.location_changed = Some(new_location_changed_timestamp);
+        relocated_entry.previous_parent_group = Some(from_parent);
 
-        let to_parent = self
+        let to_parent_group = self
             .root
             .group_by_uuid_mut(to_parent)
             .ok_or(MergeError::FindGroupError(to_parent))?;
 
-        to_parent.entries.push(relocated_entry);
+        to_parent_group.entries.push(relocated_entry);
 
         Ok(())
     }
@@ -471,20 +574,21 @@ impl Database {
         to_parent: Uuid,
         new_location_changed_timestamp: NaiveDateTime,
     ) -> Result<(), MergeError> {
-        let from_parent = self
+        let from_parent_group = self
             .root
             .group_by_uuid_mut(from_parent)
             .ok_or(MergeError::FindGroupError(from_parent))?;
 
-        let mut relocated_group = from_parent.remove_group(group_uuid)?;
+        let mut relocated_group = from_parent_group.remove_group(group_uuid)?;
         relocated_group.times.location_changed = Some(new_location_changed_timestamp);
+        relocated_group.previous_parent_group = Some(from_parent);
 
-        let to_parent = self
+        let to_parent_group = self
             .root
             .group_by_uuid_mut(to_parent)
             .ok_or(MergeError::FindGroupError(to_parent))?;
 
-        to_parent.groups.push(relocated_group);
+        to_parent_group.groups.push(relocated_group);
         Ok(())
     }
 }
@@ -596,18 +700,27 @@ impl Group {
         self.custom_icon = other.custom_icon.clone();
         self.custom_data = other.custom_data.clone();
 
-        // The location changed timestamp is handled separately when merging two databases.
+        // The location changed timestamp and usage count are handled separately.
         let current_times = self.times.clone();
         self.times = other.times.clone();
         if let Some(t) = current_times.location_changed {
             self.times.location_changed = Some(t);
         }
+        // Take the higher usage count from either database (both accumulate independently).
+        self.times.usage_count = match (current_times.usage_count, other.times.usage_count) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
 
         self.is_expanded = other.is_expanded;
         self.default_autotype_sequence = other.default_autotype_sequence.clone();
         self.enable_autotype = other.enable_autotype.clone();
         self.enable_searching = other.enable_searching.clone();
         self.last_top_visible_entry = other.last_top_visible_entry;
+        self.tags = other.tags.clone();
+        self.previous_parent_group = other.previous_parent_group;
 
         log.events.push(MergeEvent {
             event_type: MergeEventType::GroupUpdated,
@@ -617,17 +730,21 @@ impl Group {
         Ok(log)
     }
 
+    // `previous_parent_group` is excluded: like `location_changed` it tracks movement, not
+    // content, so a relocation must not be treated as a content divergence.
     pub(crate) fn has_diverged_from(&self, other: &Group) -> bool {
         let new_times = Times::new();
         let mut self_purged = self.clone();
         self_purged.times = new_times.clone();
         self_purged.groups.clear();
         self_purged.entries.clear();
+        self_purged.previous_parent_group = None;
 
         let mut other_purged = other.clone();
         other_purged.times = new_times.clone();
         other_purged.groups.clear();
         other_purged.entries.clear();
+        other_purged.previous_parent_group = None;
         !self_purged.eq(&other_purged)
     }
 }
@@ -658,10 +775,9 @@ impl Entry {
         };
 
         if destination_last_modification == source_last_modification {
-            if !self.has_diverged_from(other) {
-                // This should never happen.
-                // This means that an entry was updated without updating the last modification
-                // timestamp.
+            if self.has_diverged_from(other) {
+                // This should never happen in a well-behaved KeePass implementation.
+                // It means an entry was modified without bumping LastModificationTime.
                 return Err(MergeError::EntryModificationTimeNotUpdated(
                     other.uuid.to_string(),
                 ));
@@ -679,6 +795,14 @@ impl Entry {
         if let Some(location_changed_timestamp) = self.times.location_changed {
             merged_entry.times.location_changed = Some(location_changed_timestamp);
         }
+
+        // Take the higher usage count from either database (both accumulate independently).
+        merged_entry.times.usage_count = match (self.times.usage_count, other.times.usage_count) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
 
         Ok((Some(merged_entry), entry_merge_log))
     }
@@ -708,6 +832,15 @@ impl Entry {
         };
         let mut response = self.clone();
 
+        // The winner's current state (self) is already preserved as the merged entry fields;
+        // adding it to history would create a duplicate-timestamp entry.  We only warn.
+        if self.has_uncommitted_changes() {
+            log.warnings.push(format!(
+                "Entry {} from destination database has uncommitted changes.",
+                self.uuid
+            ));
+        }
+
         if other.has_uncommitted_changes() {
             log.warnings.push(format!(
                 "Entry {} from source database has uncommitted changes.",
@@ -715,9 +848,6 @@ impl Entry {
             ));
             source_history.add_entry(other.clone());
         }
-
-        // TODO we should probably check for uncommitted changes in the destination
-        // database here too for consistency.
 
         let history_merge_log = destination_history.merge_with(&source_history)?;
         response.history = Some(destination_history);
@@ -738,15 +868,20 @@ impl Entry {
         self.update_history();
     }
 
-    // Convenience function used in when merging two entries
+    // Convenience function used in when merging two entries.
+    //
+    // `previous_parent_group` is excluded from the comparison: like `location_changed` it tracks
+    // movement, not content, so a relocation should not be treated as a content divergence.
     pub(crate) fn has_diverged_from(&self, other_entry: &Entry) -> bool {
         let new_times = Times::default();
 
         let mut self_without_times = self.clone();
         self_without_times.times = new_times.clone();
+        self_without_times.previous_parent_group = None;
 
         let mut other_without_times = other_entry.clone();
         other_without_times.times = new_times.clone();
+        other_without_times.previous_parent_group = None;
 
         !self_without_times.eq(&other_without_times)
     }
@@ -905,6 +1040,23 @@ mod merge_tests {
 
         db.root = root_group;
         db
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers for meta tests
+    // -----------------------------------------------------------------------
+
+    fn make_timestamp(secs_since_epoch: i64) -> chrono::NaiveDateTime {
+        chrono::DateTime::from_timestamp(secs_since_epoch, 0)
+            .unwrap()
+            .naive_utc()
+    }
+
+    fn make_custom_data_item(value: &str, secs: i64) -> crate::db::CustomDataItem {
+        crate::db::CustomDataItem {
+            value: Some(crate::db::CustomDataValue::String(value.to_string())),
+            last_modification_time: Some(make_timestamp(secs)),
+        }
     }
 
     #[test]
@@ -1925,5 +2077,525 @@ mod merge_tests {
             modified_group.times.location_changed,
             Some(new_location_changed_timestamp),
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // KDBX 4.1 Group fields: tags, previous_parent_group
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_group_merge_tags() {
+        let mut destination_db = create_test_database();
+        let mut source_db = destination_db.clone();
+
+        // Give source's subgroup1 some tags with a newer modification time
+        {
+            let g = source_db.root.group_by_uuid_mut(SUBGROUP1_ID).unwrap();
+            g.tags = vec!["work".to_string(), "important".to_string()];
+            thread::sleep(time::Duration::from_secs(1));
+            g.times.last_modification = Some(Times::now());
+        }
+
+        destination_db.merge(&source_db).unwrap();
+
+        let merged = destination_db.root.group_by_uuid(SUBGROUP1_ID).unwrap();
+        assert_eq!(merged.tags, vec!["work".to_string(), "important".to_string()]);
+    }
+
+    #[test]
+    fn test_group_merge_tags_destination_wins() {
+        let mut destination_db = create_test_database();
+        let mut source_db = destination_db.clone();
+
+        // Destination is newer — its tags should be kept
+        {
+            let g = destination_db.root.group_by_uuid_mut(SUBGROUP1_ID).unwrap();
+            g.tags = vec!["local".to_string()];
+            thread::sleep(time::Duration::from_secs(1));
+            g.times.last_modification = Some(Times::now());
+        }
+        // Source gets different tags but at an older timestamp
+        {
+            let g = source_db.root.group_by_uuid_mut(SUBGROUP1_ID).unwrap();
+            g.tags = vec!["remote".to_string()];
+            // do NOT update last_modification — it stays at the original (older) value
+        }
+
+        destination_db.merge(&source_db).unwrap();
+
+        let merged = destination_db.root.group_by_uuid(SUBGROUP1_ID).unwrap();
+        assert_eq!(merged.tags, vec!["local".to_string()]);
+    }
+
+    #[test]
+    fn test_group_merge_previous_parent_group() {
+        let mut destination_db = create_test_database();
+        let mut source_db = destination_db.clone();
+
+        let prev_parent = uuid!("00000000-0000-0000-0000-000000000099");
+
+        {
+            let g = source_db.root.group_by_uuid_mut(SUBGROUP1_ID).unwrap();
+            g.previous_parent_group = Some(prev_parent);
+            thread::sleep(time::Duration::from_secs(1));
+            g.times.last_modification = Some(Times::now());
+        }
+
+        destination_db.merge(&source_db).unwrap();
+
+        let merged = destination_db.root.group_by_uuid(SUBGROUP1_ID).unwrap();
+        assert_eq!(merged.previous_parent_group, Some(prev_parent));
+    }
+
+    // -----------------------------------------------------------------------
+    // previous_parent_group set during relocation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_entry_relocation_sets_previous_parent_group() {
+        let mut destination_db = create_test_database();
+        let mut source_db = destination_db.clone();
+
+        // Relocate entry2 in source: SUBGROUP1 → GROUP2
+        thread::sleep(time::Duration::from_secs(1));
+        let ts = Times::now();
+        source_db
+            .relocate_entry(ENTRY2_ID, SUBGROUP1_ID, GROUP2_ID, ts)
+            .unwrap();
+
+        destination_db.merge(&source_db).unwrap();
+
+        let moved = destination_db.root.entry_by_uuid(ENTRY2_ID).unwrap();
+        assert_eq!(moved.previous_parent_group, Some(SUBGROUP1_ID));
+        assert_eq!(
+            destination_db.root.find_entry_parent(ENTRY2_ID).unwrap(),
+            GROUP2_ID
+        );
+    }
+
+    #[test]
+    fn test_group_relocation_sets_previous_parent_group() {
+        let mut destination_db = create_test_database();
+        let mut source_db = destination_db.clone();
+
+        // Relocate subgroup1 in source: GROUP1 → GROUP2
+        thread::sleep(time::Duration::from_secs(1));
+        let ts = Times::now();
+        source_db
+            .relocate_group(SUBGROUP1_ID, GROUP1_ID, GROUP2_ID, ts)
+            .unwrap();
+
+        destination_db.merge(&source_db).unwrap();
+
+        let moved = destination_db.root.group_by_uuid(SUBGROUP1_ID).unwrap();
+        assert_eq!(moved.previous_parent_group, Some(GROUP1_ID));
+        assert_eq!(
+            destination_db.root.find_group_parent(SUBGROUP1_ID).unwrap(),
+            GROUP2_ID
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // usage_count: always take the maximum from either database
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_entry_usage_count_max_merge() {
+        let mut destination_db = create_test_database();
+        let mut source_db = destination_db.clone();
+
+        // Destination entry has a higher usage count but older modification time
+        {
+            let e = destination_db.root.entry_by_uuid_mut(ENTRY1_ID).unwrap();
+            e.times.usage_count = Some(42);
+        }
+        // Source entry has a lower usage count but newer modification time (it "wins")
+        thread::sleep(time::Duration::from_secs(1));
+        {
+            let e = source_db.root.entry_by_uuid_mut(ENTRY1_ID).unwrap();
+            e.times.usage_count = Some(7);
+            e.set_field_and_commit(fields::TITLE, "updated_in_source");
+        }
+
+        destination_db.merge(&source_db).unwrap();
+
+        let merged = destination_db.root.entry_by_uuid(ENTRY1_ID).unwrap();
+        assert_eq!(merged.times.usage_count, Some(42)); // max(42, 7)
+        assert_eq!(merged.get_title(), Some("updated_in_source"));
+    }
+
+    #[test]
+    fn test_group_usage_count_max_merge() {
+        let mut destination_db = create_test_database();
+        let mut source_db = destination_db.clone();
+
+        // Destination group has a higher usage count but older modification time
+        {
+            let g = destination_db.root.group_by_uuid_mut(SUBGROUP1_ID).unwrap();
+            g.times.usage_count = Some(100);
+        }
+        // Source group has a lower usage count and a newer modification time (it "wins")
+        thread::sleep(time::Duration::from_secs(1));
+        {
+            let g = source_db.root.group_by_uuid_mut(SUBGROUP1_ID).unwrap();
+            g.times.usage_count = Some(3);
+            g.name = "subgroup1_renamed".to_string();
+            g.times.last_modification = Some(Times::now());
+        }
+
+        destination_db.merge(&source_db).unwrap();
+
+        let merged = destination_db.root.group_by_uuid(SUBGROUP1_ID).unwrap();
+        assert_eq!(merged.times.usage_count, Some(100)); // max(100, 3)
+        assert_eq!(merged.name, "subgroup1_renamed");
+    }
+
+    // -----------------------------------------------------------------------
+    // Entry divergence logic: same timestamp + diverged content → error
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_entry_same_timestamp_diverged_is_error() {
+        let mut e1 = Entry::new();
+        e1.set_field_and_commit(fields::TITLE, "original");
+
+        // Clone to get exact same timestamps, then diverge content without bumping timestamp
+        let mut e2 = e1.clone();
+        e2.set_unprotected(fields::TITLE, "diverged");
+
+        // They now have identical last_modification but different content
+        let result = e1.merge(&e2);
+        assert!(
+            matches!(result, Err(super::MergeError::EntryModificationTimeNotUpdated(_))),
+            "expected EntryModificationTimeNotUpdated error, got {:?}",
+            result
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Uncommitted changes in the winning (destination) entry are warned about
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_uncommitted_destination_entry_changes_warning() {
+        let mut destination_db = create_test_database();
+        let source_db = destination_db.clone(); // source stays at original (older)
+
+        // Destination gets a committed update first (so it becomes the winner) …
+        {
+            let e = destination_db.root.entry_by_uuid_mut(ENTRY1_ID).unwrap();
+            e.set_field_and_commit(fields::TITLE, "committed_v1");
+        }
+        // … then an uncommitted change on top of that
+        {
+            let e = destination_db.root.entry_by_uuid_mut(ENTRY1_ID).unwrap();
+            e.set_unprotected(fields::TITLE, "uncommitted_change");
+            // Intentionally NOT calling update_history()
+        }
+
+        let merge_result = destination_db.merge(&source_db).unwrap();
+
+        // A warning about uncommitted destination changes must be present
+        let warned = merge_result
+            .warnings
+            .iter()
+            .any(|w| w.contains("destination database has uncommitted changes"));
+        assert!(warned, "expected warning about destination uncommitted changes; got: {:?}", merge_result.warnings);
+
+        // The entry retains the uncommitted title (destination wins)
+        let merged = destination_db.root.entry_by_uuid(ENTRY1_ID).unwrap();
+        assert_eq!(merged.get_title(), Some("uncommitted_change"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Meta merge — individual timestamp-governed fields
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_meta_database_name_merge() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        let t_old = make_timestamp(1_000_000);
+        let t_new = make_timestamp(2_000_000);
+
+        destination_db.meta.database_name = Some("OldName".to_string());
+        destination_db.meta.database_name_changed = Some(t_old);
+
+        source_db.meta.database_name = Some("NewName".to_string());
+        source_db.meta.database_name_changed = Some(t_new);
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert_eq!(destination_db.meta.database_name.as_deref(), Some("NewName"));
+        assert_eq!(destination_db.meta.database_name_changed, Some(t_new));
+    }
+
+    #[test]
+    fn test_meta_database_name_destination_wins() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        let t_old = make_timestamp(1_000_000);
+        let t_new = make_timestamp(2_000_000);
+
+        destination_db.meta.database_name = Some("NewerName".to_string());
+        destination_db.meta.database_name_changed = Some(t_new);
+
+        source_db.meta.database_name = Some("OlderName".to_string());
+        source_db.meta.database_name_changed = Some(t_old);
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert_eq!(
+            destination_db.meta.database_name.as_deref(),
+            Some("NewerName")
+        );
+    }
+
+    #[test]
+    fn test_meta_database_description_merge() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        destination_db.meta.database_description = Some("Old desc".to_string());
+        destination_db.meta.database_description_changed = Some(make_timestamp(1_000_000));
+
+        source_db.meta.database_description = Some("New desc".to_string());
+        source_db.meta.database_description_changed = Some(make_timestamp(2_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert_eq!(
+            destination_db.meta.database_description.as_deref(),
+            Some("New desc")
+        );
+    }
+
+    #[test]
+    fn test_meta_default_username_merge() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        destination_db.meta.default_username = Some("alice".to_string());
+        destination_db.meta.default_username_changed = Some(make_timestamp(1_000_000));
+
+        source_db.meta.default_username = Some("bob".to_string());
+        source_db.meta.default_username_changed = Some(make_timestamp(2_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert_eq!(destination_db.meta.default_username.as_deref(), Some("bob"));
+    }
+
+    #[test]
+    fn test_meta_recyclebin_merge() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        let bin_uuid = uuid!("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+
+        destination_db.meta.recyclebin_enabled = Some(false);
+        destination_db.meta.recyclebin_uuid = None;
+        destination_db.meta.recyclebin_changed = Some(make_timestamp(1_000_000));
+
+        source_db.meta.recyclebin_enabled = Some(true);
+        source_db.meta.recyclebin_uuid = Some(bin_uuid);
+        source_db.meta.recyclebin_changed = Some(make_timestamp(2_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert_eq!(destination_db.meta.recyclebin_enabled, Some(true));
+        assert_eq!(destination_db.meta.recyclebin_uuid, Some(bin_uuid));
+        assert_eq!(destination_db.meta.recyclebin_changed, Some(make_timestamp(2_000_000)));
+    }
+
+    #[test]
+    fn test_meta_entry_templates_group_merge() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        let tmpl_uuid = uuid!("11111111-2222-3333-4444-555555555555");
+
+        source_db.meta.entry_templates_group = Some(tmpl_uuid);
+        source_db.meta.entry_templates_group_changed = Some(make_timestamp(2_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert_eq!(destination_db.meta.entry_templates_group, Some(tmpl_uuid));
+    }
+
+    #[test]
+    fn test_meta_settings_bucket_merge() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        destination_db.meta.history_max_items = Some(10);
+        destination_db.meta.history_max_size = Some(1_000_000);
+        destination_db.meta.maintenance_history_days = Some(30);
+        destination_db.meta.settings_changed = Some(make_timestamp(1_000_000));
+
+        source_db.meta.history_max_items = Some(50);
+        source_db.meta.history_max_size = Some(5_000_000);
+        source_db.meta.maintenance_history_days = Some(365);
+        source_db.meta.settings_changed = Some(make_timestamp(2_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert_eq!(destination_db.meta.history_max_items, Some(50));
+        assert_eq!(destination_db.meta.history_max_size, Some(5_000_000));
+        assert_eq!(destination_db.meta.maintenance_history_days, Some(365));
+        assert_eq!(destination_db.meta.settings_changed, Some(make_timestamp(2_000_000)));
+    }
+
+    #[test]
+    fn test_meta_settings_bucket_destination_wins() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        destination_db.meta.history_max_items = Some(100);
+        destination_db.meta.settings_changed = Some(make_timestamp(3_000_000));
+
+        source_db.meta.history_max_items = Some(5);
+        source_db.meta.settings_changed = Some(make_timestamp(1_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert_eq!(destination_db.meta.history_max_items, Some(100));
+    }
+
+    #[test]
+    fn test_meta_master_key_changed_merge() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        destination_db.meta.master_key_changed = Some(make_timestamp(1_000_000));
+        source_db.meta.master_key_changed = Some(make_timestamp(5_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        // Always takes the more recent key-change timestamp
+        assert_eq!(
+            destination_db.meta.master_key_changed,
+            Some(make_timestamp(5_000_000))
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Meta custom data — per-item merge (KDBX 4.1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_meta_custom_data_new_item_added() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        source_db
+            .meta
+            .custom_data
+            .insert("Plugin_Key".to_string(), make_custom_data_item("value", 1_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert!(destination_db.meta.custom_data.contains_key("Plugin_Key"));
+        let item = &destination_db.meta.custom_data["Plugin_Key"];
+        assert_eq!(
+            item.value,
+            Some(crate::db::CustomDataValue::String("value".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_meta_custom_data_per_item_newer_source_wins() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        destination_db
+            .meta
+            .custom_data
+            .insert("Plugin_Key".to_string(), make_custom_data_item("old_value", 1_000_000));
+
+        source_db
+            .meta
+            .custom_data
+            .insert("Plugin_Key".to_string(), make_custom_data_item("new_value", 2_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        let item = &destination_db.meta.custom_data["Plugin_Key"];
+        assert_eq!(
+            item.value,
+            Some(crate::db::CustomDataValue::String("new_value".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_meta_custom_data_per_item_destination_wins() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        destination_db
+            .meta
+            .custom_data
+            .insert("Plugin_Key".to_string(), make_custom_data_item("newer_value", 3_000_000));
+
+        source_db
+            .meta
+            .custom_data
+            .insert("Plugin_Key".to_string(), make_custom_data_item("older_value", 1_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        let item = &destination_db.meta.custom_data["Plugin_Key"];
+        assert_eq!(
+            item.value,
+            Some(crate::db::CustomDataValue::String("newer_value".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_meta_custom_data_disjoint_keys_both_kept() {
+        let mut destination_db = Database::new(Default::default());
+        let mut source_db = Database::new(Default::default());
+
+        destination_db
+            .meta
+            .custom_data
+            .insert("Key_A".to_string(), make_custom_data_item("val_a", 1_000_000));
+
+        source_db
+            .meta
+            .custom_data
+            .insert("Key_B".to_string(), make_custom_data_item("val_b", 1_000_000));
+
+        destination_db.merge(&source_db).unwrap();
+
+        assert!(destination_db.meta.custom_data.contains_key("Key_A"));
+        assert!(destination_db.meta.custom_data.contains_key("Key_B"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Meta merge idempotence
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_meta_merge_idempotence() {
+        let mut destination_db = Database::new(Default::default());
+        let t = make_timestamp(1_000_000);
+
+        destination_db.meta.database_name = Some("MyDB".to_string());
+        destination_db.meta.database_name_changed = Some(t);
+        destination_db.meta.history_max_items = Some(20);
+        destination_db.meta.settings_changed = Some(t);
+        destination_db
+            .meta
+            .custom_data
+            .insert("K".to_string(), make_custom_data_item("v", 1_000_000));
+
+        let source_db = destination_db.clone();
+        destination_db.merge(&source_db).unwrap();
+
+        // Nothing should change after merging with an identical database
+        assert_eq!(destination_db, source_db);
     }
 }
