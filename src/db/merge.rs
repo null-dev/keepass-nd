@@ -787,8 +787,8 @@ impl Entry {
 
         let (mut merged_entry, entry_merge_log) = match destination_last_modification > source_last_modification
         {
-            true => self.merge_history(other)?,
-            false => other.clone().merge_history(self)?,
+            true => self.merge_history(other, true)?,
+            false => other.clone().merge_history(self, false)?,
         };
 
         // The location changed timestamp is handled separately when merging two databases.
@@ -807,15 +807,22 @@ impl Entry {
         Ok((Some(merged_entry), entry_merge_log))
     }
 
-    pub(crate) fn merge_history(&self, other: &Entry) -> Result<(Entry, MergeLog), MergeError> {
+    pub(crate) fn merge_history(
+        &self,
+        other: &Entry,
+        self_is_destination: bool,
+    ) -> Result<(Entry, MergeLog), MergeError> {
         let mut log = MergeLog::default();
+
+        let winner_label = if self_is_destination { "destination" } else { "source" };
+        let loser_label = if self_is_destination { "source" } else { "destination" };
 
         let mut source_history = match &other.history {
             Some(h) => h.clone(),
             None => {
                 log.warnings.push(format!(
-                    "Entry {} from source database had no history.",
-                    self.uuid
+                    "Entry {} from {} database had no history.",
+                    self.uuid, loser_label
                 ));
                 History::default()
             }
@@ -824,8 +831,8 @@ impl Entry {
             Some(h) => h.clone(),
             None => {
                 log.warnings.push(format!(
-                    "Entry {} from destination database had no history.",
-                    self.uuid
+                    "Entry {} from {} database had no history.",
+                    self.uuid, winner_label
                 ));
                 History::default()
             }
@@ -836,15 +843,15 @@ impl Entry {
         // adding it to history would create a duplicate-timestamp entry.  We only warn.
         if self.has_uncommitted_changes() {
             log.warnings.push(format!(
-                "Entry {} from destination database has uncommitted changes.",
-                self.uuid
+                "Entry {} from {} database has uncommitted changes.",
+                self.uuid, winner_label
             ));
         }
 
         if other.has_uncommitted_changes() {
             log.warnings.push(format!(
-                "Entry {} from source database has uncommitted changes.",
-                self.uuid
+                "Entry {} from {} database has uncommitted changes.",
+                self.uuid, loser_label
             ));
             source_history.add_entry(other.clone());
         }
@@ -2303,6 +2310,42 @@ mod merge_tests {
         assert!(warned, "expected warning about destination uncommitted changes; got: {:?}", merge_result.warnings);
 
         // The entry retains the uncommitted title (destination wins)
+        let merged = destination_db.root.entry_by_uuid(ENTRY1_ID).unwrap();
+        assert_eq!(merged.get_title(), Some("uncommitted_change"));
+    }
+
+    #[test]
+    fn test_uncommitted_source_entry_changes_warning() {
+        let mut destination_db = create_test_database();
+        let mut source_db = destination_db.clone();
+
+        // Source gets a committed update first (so it becomes the winner) …
+        {
+            let e = source_db.root.entry_by_uuid_mut(ENTRY1_ID).unwrap();
+            e.set_field_and_commit(fields::TITLE, "committed_v1");
+        }
+        // … then an uncommitted change on top of that
+        {
+            let e = source_db.root.entry_by_uuid_mut(ENTRY1_ID).unwrap();
+            e.set_unprotected(fields::TITLE, "uncommitted_change");
+            // Intentionally NOT calling update_history()
+        }
+
+        let merge_result = destination_db.merge(&source_db).unwrap();
+
+        // A warning about uncommitted SOURCE changes must be present.
+        // The bug: the code incorrectly says "destination database" even when source wins.
+        let warned = merge_result
+            .warnings
+            .iter()
+            .any(|w| w.contains("source database has uncommitted changes"));
+        assert!(
+            warned,
+            "expected warning about source uncommitted changes; got: {:?}",
+            merge_result.warnings
+        );
+
+        // The entry should retain source's uncommitted title (source wins)
         let merged = destination_db.root.entry_by_uuid(ENTRY1_ID).unwrap();
         assert_eq!(merged.get_title(), Some("uncommitted_change"));
     }
