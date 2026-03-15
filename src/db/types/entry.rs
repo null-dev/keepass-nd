@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::db::{fields, Attachment, AutoType, Color, CustomDataItem, History, Times, Value};
+use crate::db::{fields, Attachment, AutoType, Color, CustomDataItem, CustomIcon, History, Times, Value};
 
 /// A database entry containing several key-value fields.
 #[derive(Debug, Default, Eq, PartialEq, Clone)]
@@ -18,13 +18,16 @@ pub struct Entry {
     pub custom_data: HashMap<String, CustomDataItem>,
 
     pub icon_id: Option<usize>,
-    pub custom_icon: Option<(Uuid, Vec<u8>)>,
+    pub custom_icon: Option<CustomIcon>,
 
     pub foreground_color: Option<Color>,
     pub background_color: Option<Color>,
 
     pub override_url: Option<String>,
     pub quality_check: Option<bool>,
+
+    /// UUID of the group this entry was moved from (KDBX 4.1+)
+    pub previous_parent_group: Option<Uuid>,
 
     pub attachments: HashMap<String, Attachment>,
 

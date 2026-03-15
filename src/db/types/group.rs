@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::db::{CustomDataItem, Entry, Times};
+use crate::db::{CustomDataItem, CustomIcon, Entry, Times};
 
 /// A database group with child groups and entries
 #[derive(Debug, Default, Eq, PartialEq, Clone)]
@@ -20,8 +20,8 @@ pub struct Group {
     /// ID of the group's icon
     pub icon_id: Option<usize>,
 
-    /// UUID for a custom group icon
-    pub custom_icon_uuid: Option<Uuid>,
+    /// Custom icon for this group (includes KDBX 4.1 name/last_modification_time)
+    pub custom_icon: Option<CustomIcon>,
 
     /// The list of child groups
     pub groups: Vec<Group>,
@@ -51,6 +51,12 @@ pub struct Group {
     // TODO figure out what that is supposed to mean. According to the KeePass sourcecode, it has
     // something to do with restoring selected items when re-opening a database.
     pub last_top_visible_entry: Option<Uuid>,
+
+    /// Tags associated with this group (KDBX 4.1+)
+    pub tags: Vec<String>,
+
+    /// UUID of the group this group was moved from (KDBX 4.1+)
+    pub previous_parent_group: Option<Uuid>,
 }
 
 impl Group {

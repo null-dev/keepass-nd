@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::crypt::CryptographyError;
 use crate::{
     crypt::ciphers::Cipher,
+    db::CustomIcon,
     format::xml_db::{
         custom_serde::{cs_opt_bool, cs_opt_fromstr, cs_opt_string},
         entry::{Entry, UnprotectError},
@@ -53,6 +54,14 @@ pub struct Group {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_data: Option<crate::format::xml_db::meta::CustomData>,
 
+    /// Tags for this group (KDBX 4.1+)
+    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    pub tags: Option<String>,
+
+    /// UUID of the group this group was moved from (KDBX 4.1+)
+    #[serde(default, rename = "PreviousParentGroup", skip_serializing_if = "Option::is_none")]
+    pub previous_parent_group: Option<UUID>,
+
     #[serde(default, rename = "$value")]
     pub children: Vec<GroupOrEntry>,
 }
@@ -68,7 +77,7 @@ impl Group {
         self,
         target: &mut crate::db::Group,
         header_attachments: &[crate::db::Attachment],
-        custom_icons: &HashMap<Uuid, Vec<u8>>,
+        custom_icons: &HashMap<Uuid, CustomIcon>,
         inner_decryptor: &mut dyn Cipher,
     ) -> Result<(), UnprotectError> {
         target.name = self.name;
@@ -76,8 +85,8 @@ impl Group {
         target.icon_id = self.icon_id;
 
         if let Some(uuid) = self.custom_icon_uuid {
-            if custom_icons.contains_key(&uuid.0) {
-                target.custom_icon_uuid = Some(uuid.0);
+            if let Some(ci) = custom_icons.get(&uuid.0) {
+                target.custom_icon = Some(ci.clone());
             }
         }
 
@@ -87,6 +96,11 @@ impl Group {
         target.enable_autotype = self.enable_auto_type;
         target.enable_searching = self.enable_searching;
         target.last_top_visible_entry = self.last_top_visible_entry.map(|u| u.0);
+        target.tags = self
+            .tags
+            .map(|t| t.split(',').map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+        target.previous_parent_group = self.previous_parent_group.map(|u| u.0);
 
         if let Some(cd) = self.custom_data {
             target.custom_data = cd.into();
@@ -122,7 +136,7 @@ impl Group {
         source: &crate::db::Group,
         inner_cipher: &mut dyn Cipher,
         attachments: &mut Vec<crate::db::Attachment>,
-        custom_icons: &mut HashMap<Uuid, Vec<u8>>,
+        custom_icons: &mut HashMap<Uuid, CustomIcon>,
     ) -> Result<Self, CryptographyError> {
         let mut children = Vec::new();
 
@@ -150,19 +164,28 @@ impl Group {
             Some(source.custom_data.clone().into())
         };
 
+        let custom_icon_uuid = if let Some(ci) = source.custom_icon.as_ref() {
+            custom_icons.insert(ci.uuid, ci.clone());
+            Some(UUID(ci.uuid))
+        } else {
+            None
+        };
+
         Ok(Group {
             uuid: UUID(source.uuid),
             name: source.name.clone(),
             notes: source.notes.clone(),
             icon_id: source.icon_id,
-            custom_icon_uuid: source.custom_icon_uuid.map(UUID),
+            custom_icon_uuid,
             times: Some(source.times.clone().into()),
             is_expanded: Some(source.is_expanded),
             default_auto_type_sequence: source.default_autotype_sequence.clone(),
             enable_auto_type: source.enable_autotype,
             enable_searching: source.enable_searching,
-            last_top_visible_entry: source.last_top_visible_entry.map(|eid| UUID(eid)),
+            last_top_visible_entry: source.last_top_visible_entry.map(UUID),
             custom_data,
+            tags: source.tags.iter().cloned().reduce(|a, b| format!("{a},{b}")),
+            previous_parent_group: source.previous_parent_group.map(UUID),
             children,
         })
     }

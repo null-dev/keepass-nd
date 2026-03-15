@@ -445,6 +445,14 @@ pub struct Icon {
 
     #[serde(with = "cs_base64")]
     pub data: Vec<u8>,
+
+    /// Optional name for the icon (KDBX 4.1+)
+    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Last modification time of the icon (KDBX 4.1+)
+    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
+    pub last_modification_time: Option<Timestamp>,
 }
 
 #[cfg(test)]
@@ -547,6 +555,8 @@ mod tests {
                 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
             ])),
             data: vec![1, 2, 3, 4, 5],
+            name: None,
+            last_modification_time: None,
         };
 
         let serialized = quick_xml::se::to_string(&icon).unwrap();
@@ -607,6 +617,8 @@ mod tests {
                         0x0e, 0x0f,
                     ])),
                     data: vec![1, 2, 3, 4, 5],
+                    name: None,
+                    last_modification_time: None,
                 }],
             }),
             recycle_bin_enabled: Some(true),

@@ -86,11 +86,21 @@ impl KeePassFile {
         }
 
         let custom_icons = self.meta.custom_icons.take();
-        let custom_icons: HashMap<Uuid, Vec<u8>> = custom_icons
+        let custom_icons: HashMap<Uuid, crate::db::CustomIcon> = custom_icons
             .map(|ci| {
                 ci.icons
                     .into_iter()
-                    .map(|icon| (icon.uuid.0, icon.data))
+                    .map(|icon| {
+                        (
+                            icon.uuid.0,
+                            crate::db::CustomIcon {
+                                uuid: icon.uuid.0,
+                                data: icon.data,
+                                name: icon.name,
+                                last_modification_time: icon.last_modification_time.map(|t| t.time),
+                            },
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -125,7 +135,7 @@ impl KeePassFile {
     ) -> Result<Self, CryptographyError> {
         use crate::format::xml_db::meta::Icon;
 
-        let mut custom_icons = HashMap::new();
+        let mut custom_icons: HashMap<Uuid, crate::db::CustomIcon> = HashMap::new();
 
         let group = Group::db_to_xml(&db.root, inner_cipher, attachments, &mut custom_icons)?;
 
@@ -133,9 +143,11 @@ impl KeePassFile {
         meta.custom_icons
             .get_or_insert_default()
             .icons
-            .extend(custom_icons.into_iter().map(|(uuid, data)| Icon {
-                uuid: UUID(uuid),
-                data,
+            .extend(custom_icons.into_iter().map(|(_, ci)| Icon {
+                uuid: UUID(ci.uuid),
+                data: ci.data,
+                name: ci.name,
+                last_modification_time: ci.last_modification_time.as_ref().map(|t| (*t).into()),
             }));
 
         let deleted_objects = if db.deleted_objects.is_empty() {

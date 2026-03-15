@@ -593,7 +593,7 @@ impl Group {
         self.name = other.name.clone();
         self.notes = other.notes.clone();
         self.icon_id = other.icon_id;
-        self.custom_icon_uuid = other.custom_icon_uuid;
+        self.custom_icon = other.custom_icon.clone();
         self.custom_data = other.custom_data.clone();
 
         // The location changed timestamp is handled separately when merging two databases.

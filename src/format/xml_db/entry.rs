@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     crypt::{ciphers::Cipher, CryptographyError},
-    db::Color,
+    db::{Color, CustomIcon},
     format::xml_db::{
         custom_serde::{cs_bool, cs_opt_bool, cs_opt_fromstr, cs_opt_string},
         meta::CustomData,
@@ -41,6 +41,12 @@ pub struct Entry {
     #[serde(default, with = "cs_opt_string")]
     pub tags: Option<String>,
 
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
+    pub quality_check: Option<bool>,
+
+    #[serde(default, rename = "PreviousParentGroup", skip_serializing_if = "Option::is_none")]
+    pub previous_parent_group: Option<UUID>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub times: Option<Times>,
 
@@ -65,20 +71,22 @@ impl Entry {
         self,
         target: &mut crate::db::Entry,
         header_attachments: &[crate::db::Attachment],
-        custom_icons: &HashMap<Uuid, Vec<u8>>,
+        custom_icons: &HashMap<Uuid, CustomIcon>,
         inner_decryptor: &mut dyn Cipher,
     ) -> Result<(), UnprotectError> {
         target.icon_id = self.icon_id;
 
         if let Some(uuid) = self.custom_icon_uuid {
-            if let Some(data) = custom_icons.get(&uuid.0) {
-                target.custom_icon = Some((uuid.0, data.clone()));
+            if let Some(ci) = custom_icons.get(&uuid.0) {
+                target.custom_icon = Some(ci.clone());
             }
         }
 
         target.foreground_color = self.foreground_color;
         target.background_color = self.background_color;
         target.override_url = self.override_url;
+        target.quality_check = self.quality_check;
+        target.previous_parent_group = self.previous_parent_group.map(|u| u.0);
         target.tags = self
             .tags
             .map(|t| t.split(',').map(|s| s.to_string()).collect())
@@ -140,11 +148,11 @@ impl Entry {
         db: &crate::db::Entry,
         inner_encryptor: &mut dyn Cipher,
         attachments: &mut Vec<crate::db::Attachment>,
-        custom_icons: &mut HashMap<Uuid, Vec<u8>>,
+        custom_icons: &mut HashMap<Uuid, CustomIcon>,
     ) -> Result<Self, CryptographyError> {
-        let custom_icon_uuid = if let Some((uuid, icon)) = db.custom_icon.as_ref() {
-            custom_icons.insert(*uuid, icon.to_vec());
-            Some(UUID(*uuid))
+        let custom_icon_uuid = if let Some(ci) = db.custom_icon.as_ref() {
+            custom_icons.insert(ci.uuid, ci.clone());
+            Some(UUID(ci.uuid))
         } else {
             None
         };
@@ -208,6 +216,8 @@ impl Entry {
             foreground_color: db.foreground_color.clone(),
             background_color: db.background_color.clone(),
             override_url: db.override_url.clone(),
+            quality_check: db.quality_check,
+            previous_parent_group: db.previous_parent_group.map(UUID),
             tags: db.tags.iter().cloned().reduce(|a, b| format!("{a},{b}")),
             times: Some(db.times.clone().into()),
             string_fields,
