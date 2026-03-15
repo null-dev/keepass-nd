@@ -578,6 +578,115 @@ mod tests {
             &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
         );
         assert_eq!(icon.data, vec![1, 2, 3, 4, 5]);
+        // KDBX 4.1 fields absent
+        assert!(icon.name.is_none());
+        assert!(icon.last_modification_time.is_none());
+    }
+
+    // ── KDBX 4.1: Icon Name + LastModificationTime ───────────────────────────
+
+    #[test]
+    fn test_deserialize_icon_with_name() {
+        let xml = r#"<Icon>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Data>AQIDBAU=</Data>
+            <Name>My Fancy Icon</Name>
+        </Icon>"#;
+        let icon: Icon = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(icon.name.as_deref(), Some("My Fancy Icon"));
+        assert!(icon.last_modification_time.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_icon_with_last_modification_time_base64() {
+        // cKSw3A4AAAA= is the base64-encoded KeePass timestamp for 2023-10-05T12:34:56
+        let xml = r#"<Icon>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Data>AQIDBAU=</Data>
+            <LastModificationTime>cKSw3A4AAAA=</LastModificationTime>
+        </Icon>"#;
+        let icon: Icon = quick_xml::de::from_str(xml).unwrap();
+        let ts = icon.last_modification_time.unwrap();
+        assert_eq!(
+            ts.time,
+            NaiveDateTime::from_str("2023-10-05T12:34:56").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_deserialize_icon_with_all_kdbx41_fields() {
+        let xml = r#"<Icon>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Data>AQIDBAU=</Data>
+            <Name>Full Icon</Name>
+            <LastModificationTime>cKSw3A4AAAA=</LastModificationTime>
+        </Icon>"#;
+        let icon: Icon = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(icon.data, vec![1, 2, 3, 4, 5]);
+        assert_eq!(icon.name.as_deref(), Some("Full Icon"));
+        assert!(icon.last_modification_time.is_some());
+    }
+
+    #[test]
+    fn test_serialize_icon_with_name() {
+        let icon = Icon {
+            uuid: UUID(Uuid::from_bytes([
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+            ])),
+            data: vec![1, 2, 3, 4, 5],
+            name: Some("Named Icon".to_string()),
+            last_modification_time: None,
+        };
+        let serialized = quick_xml::se::to_string(&icon).unwrap();
+        assert!(
+            serialized.contains("<Name>Named Icon</Name>"),
+            "Name missing in: {}", serialized
+        );
+        assert!(
+            !serialized.contains("LastModificationTime"),
+            "LastModificationTime should be absent when None: {}", serialized
+        );
+    }
+
+    #[test]
+    fn test_serialize_icon_with_last_modification_time() {
+        let icon = Icon {
+            uuid: UUID(Uuid::from_bytes([
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+            ])),
+            data: vec![1, 2, 3, 4, 5],
+            name: None,
+            last_modification_time: Some(Timestamp::new_base64(
+                NaiveDateTime::from_str("2023-10-05T12:34:56").unwrap(),
+            )),
+        };
+        let serialized = quick_xml::se::to_string(&icon).unwrap();
+        assert!(
+            serialized.contains("<LastModificationTime>cKSw3A4AAAA=</LastModificationTime>"),
+            "LastModificationTime missing in: {}", serialized
+        );
+        assert!(
+            !serialized.contains("<Name>"),
+            "Name should be absent when None: {}", serialized
+        );
+    }
+
+    #[test]
+    fn test_serialize_icon_kdbx40_fields_only_no_extras() {
+        // A KDBX 4.0-style icon (no name, no lmt) must not emit those elements.
+        let icon = Icon {
+            uuid: UUID(Uuid::from_bytes([
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+            ])),
+            data: vec![1, 2, 3, 4, 5],
+            name: None,
+            last_modification_time: None,
+        };
+        let serialized = quick_xml::se::to_string(&icon).unwrap();
+        assert_eq!(
+            serialized,
+            "<Icon><UUID>AAECAwQFBgcICQoLDA0ODw==</UUID><Data>AQIDBAU=</Data></Icon>"
+        );
     }
 
     #[test]

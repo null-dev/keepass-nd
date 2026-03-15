@@ -261,5 +261,119 @@ mod tests {
         assert_eq!(group.0.enable_searching.unwrap(), false);
         assert_eq!(group.0.custom_data.is_some(), true);
         assert_eq!(group.0.children.len(), 4);
+        // KDBX 4.1 fields absent from this fixture
+        assert!(group.0.tags.is_none());
+        assert!(group.0.previous_parent_group.is_none());
+    }
+
+    // ── KDBX 4.1: Group Tags ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_deserialize_group_tags() {
+        let xml = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Tagged</Name>
+            <Tags>work,personal,important</Tags>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(group.0.tags.as_deref(), Some("work,personal,important"));
+    }
+
+    #[test]
+    fn test_deserialize_group_tags_absent() {
+        let xml = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Untagged</Name>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml).unwrap();
+        assert!(group.0.tags.is_none());
+    }
+
+    #[test]
+    fn test_serialize_group_tags() {
+        let xml_in = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Tagged</Name>
+            <Tags>alpha,beta</Tags>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&group).unwrap();
+        assert!(
+            serialized.contains("<Tags>alpha,beta</Tags>"),
+            "Tags missing in: {}", serialized
+        );
+    }
+
+    #[test]
+    fn test_serialize_group_tags_none_omitted() {
+        let xml_in = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Plain</Name>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&group).unwrap();
+        assert!(
+            !serialized.contains("<Tags>"),
+            "Tags element should be absent when None: {}", serialized
+        );
+    }
+
+    // ── KDBX 4.1: Group PreviousParentGroup ──────────────────────────────────
+
+    #[test]
+    fn test_deserialize_group_previous_parent_group() {
+        let xml = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Relocated</Name>
+            <PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml).unwrap();
+        let ppg = group.0.previous_parent_group.expect("expected PreviousParentGroup");
+        assert_eq!(
+            ppg.0.as_bytes(),
+            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+              0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
+        );
+    }
+
+    #[test]
+    fn test_deserialize_group_previous_parent_group_absent() {
+        let xml = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Static</Name>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml).unwrap();
+        assert!(group.0.previous_parent_group.is_none());
+    }
+
+    #[test]
+    fn test_serialize_group_previous_parent_group() {
+        let xml_in = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Moved</Name>
+            <PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&group).unwrap();
+        assert!(
+            serialized.contains(
+                "<PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>"
+            ),
+            "PreviousParentGroup missing in: {}", serialized
+        );
+    }
+
+    #[test]
+    fn test_serialize_group_previous_parent_group_none_omitted() {
+        let xml_in = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Static</Name>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&group).unwrap();
+        assert!(
+            !serialized.contains("PreviousParentGroup"),
+            "PreviousParentGroup should be absent when None: {}", serialized
+        );
     }
 }

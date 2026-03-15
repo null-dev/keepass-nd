@@ -150,3 +150,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 [[example]]
 name = "save_database"
 required-features = ["save_kdbx4"]
+
+[profile.dev]
+split-debuginfo = "unpacked"

@@ -581,5 +581,114 @@ mod tests {
         assert!(deserialized.0.tags.is_none());
         assert!(deserialized.0.string_fields.is_empty());
         assert!(deserialized.0.binary_fields.is_empty());
+        // KDBX 4.1 fields absent from minimal entry
+        assert!(deserialized.0.quality_check.is_none());
+        assert!(deserialized.0.previous_parent_group.is_none());
+    }
+
+    // ── KDBX 4.1: QualityCheck ───────────────────────────────────────────────
+
+    #[test]
+    fn test_deserialize_quality_check_true() {
+        let xml = r#"<Entry>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <QualityCheck>True</QualityCheck>
+        </Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(entry.0.quality_check, Some(true));
+    }
+
+    #[test]
+    fn test_deserialize_quality_check_false() {
+        let xml = r#"<Entry>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <QualityCheck>False</QualityCheck>
+        </Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(entry.0.quality_check, Some(false));
+    }
+
+    #[test]
+    fn test_deserialize_quality_check_absent() {
+        let xml = r#"<Entry><UUID>AAECAwQFBgcICQoLDA0ODw==</UUID></Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(entry.0.quality_check, None);
+    }
+
+    #[test]
+    fn test_serialize_quality_check_true() {
+        // Build a minimal Entry with quality_check = Some(true) and check the XML.
+        let xml_in = r#"<Entry>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <QualityCheck>True</QualityCheck>
+        </Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&entry).unwrap();
+        assert!(
+            serialized.contains("<QualityCheck>True</QualityCheck>"),
+            "serialized XML missing QualityCheck: {}", serialized
+        );
+    }
+
+    #[test]
+    fn test_serialize_quality_check_none_omitted() {
+        // When quality_check is None, the element must not appear in output.
+        let xml_in = r#"<Entry><UUID>AAECAwQFBgcICQoLDA0ODw==</UUID></Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&entry).unwrap();
+        assert!(
+            !serialized.contains("QualityCheck"),
+            "QualityCheck should be absent when None: {}", serialized
+        );
+    }
+
+    // ── KDBX 4.1: PreviousParentGroup ────────────────────────────────────────
+
+    #[test]
+    fn test_deserialize_previous_parent_group() {
+        // AAECAwQFBgcICQoLDA0ODw== decodes to the 16-byte sequence 00..0f
+        let xml = r#"<Entry>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>
+        </Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml).unwrap();
+        let ppg = entry.0.previous_parent_group.expect("expected PreviousParentGroup");
+        assert_eq!(
+            ppg.0.as_bytes(),
+            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+              0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
+        );
+    }
+
+    #[test]
+    fn test_deserialize_previous_parent_group_absent() {
+        let xml = r#"<Entry><UUID>AAECAwQFBgcICQoLDA0ODw==</UUID></Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml).unwrap();
+        assert!(entry.0.previous_parent_group.is_none());
+    }
+
+    #[test]
+    fn test_serialize_previous_parent_group() {
+        let xml_in = r#"<Entry>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>
+        </Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&entry).unwrap();
+        assert!(
+            serialized.contains("<PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>"),
+            "PreviousParentGroup missing or wrong in: {}", serialized
+        );
+    }
+
+    #[test]
+    fn test_serialize_previous_parent_group_none_omitted() {
+        let xml_in = r#"<Entry><UUID>AAECAwQFBgcICQoLDA0ODw==</UUID></Entry>"#;
+        let entry: Test<Entry> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&entry).unwrap();
+        assert!(
+            !serialized.contains("PreviousParentGroup"),
+            "PreviousParentGroup should be absent when None: {}", serialized
+        );
     }
 }
