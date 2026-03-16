@@ -159,7 +159,7 @@ impl KeePassFile {
                     .iter()
                     .map(|(uuid, deletion_time)| DeletedObject {
                         uuid: UUID(*uuid),
-                        deletion_time: deletion_time.map(Timestamp::new_iso8601),
+                        deletion_time: deletion_time.map(Into::into),
                     })
                     .collect(),
             })
@@ -226,7 +226,7 @@ pub struct DeletedObject {
     #[serde(rename = "UUID")]
     uuid: UUID,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
     deletion_time: Option<Timestamp>,
 }
 

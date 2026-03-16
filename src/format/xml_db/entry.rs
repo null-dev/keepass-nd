@@ -23,7 +23,12 @@ pub struct Entry {
     #[serde(rename = "UUID")]
     pub uuid: UUID,
 
-    #[serde(default, rename = "IconID", with = "cs_opt_fromstr")]
+    #[serde(
+        default,
+        rename = "IconID",
+        with = "cs_opt_fromstr",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub icon_id: Option<usize>,
 
     #[serde(default, rename = "CustomIconUUID", skip_serializing_if = "Option::is_none")]
@@ -44,7 +49,11 @@ pub struct Entry {
     #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     pub quality_check: Option<bool>,
 
-    #[serde(default, rename = "PreviousParentGroup", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "PreviousParentGroup",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub previous_parent_group: Option<UUID>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -626,7 +635,8 @@ mod tests {
         let serialized = quick_xml::se::to_string(&entry).unwrap();
         assert!(
             serialized.contains("<QualityCheck>True</QualityCheck>"),
-            "serialized XML missing QualityCheck: {}", serialized
+            "serialized XML missing QualityCheck: {}",
+            serialized
         );
     }
 
@@ -638,7 +648,8 @@ mod tests {
         let serialized = quick_xml::se::to_string(&entry).unwrap();
         assert!(
             !serialized.contains("QualityCheck"),
-            "QualityCheck should be absent when None: {}", serialized
+            "QualityCheck should be absent when None: {}",
+            serialized
         );
     }
 
@@ -652,11 +663,13 @@ mod tests {
             <PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>
         </Entry>"#;
         let entry: Test<Entry> = quick_xml::de::from_str(xml).unwrap();
-        let ppg = entry.0.previous_parent_group.expect("expected PreviousParentGroup");
+        let ppg = entry
+            .0
+            .previous_parent_group
+            .expect("expected PreviousParentGroup");
         assert_eq!(
             ppg.0.as_bytes(),
-            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-              0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
+            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
         );
     }
 
@@ -677,7 +690,8 @@ mod tests {
         let serialized = quick_xml::se::to_string(&entry).unwrap();
         assert!(
             serialized.contains("<PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>"),
-            "PreviousParentGroup missing or wrong in: {}", serialized
+            "PreviousParentGroup missing or wrong in: {}",
+            serialized
         );
     }
 
@@ -688,7 +702,8 @@ mod tests {
         let serialized = quick_xml::se::to_string(&entry).unwrap();
         assert!(
             !serialized.contains("PreviousParentGroup"),
-            "PreviousParentGroup should be absent when None: {}", serialized
+            "PreviousParentGroup should be absent when None: {}",
+            serialized
         );
     }
 }
