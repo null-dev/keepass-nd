@@ -45,9 +45,10 @@ impl From<Timestamp> for NaiveDateTime {
 
 impl From<NaiveDateTime> for Timestamp {
     fn from(t: NaiveDateTime) -> Self {
-        // NOTE: always use ISO8601 for serialization. We could remember the original format to
-        // have more faithful round-tripping
-        Timestamp::new_iso8601(t)
+        // KDBX 4.x stores timestamps inside the encrypted XML payload as base64-encoded Int64
+        // values. Keep ISO-8601 available for parsing and explicit test fixtures, but default to
+        // the KDBX representation when reconstructing XML from the DB model.
+        Timestamp::new_base64(t)
     }
 }
 

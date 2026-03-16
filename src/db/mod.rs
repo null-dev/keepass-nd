@@ -85,4 +85,45 @@ mod database_tests {
 
         assert_eq!(db, db_loaded);
     }
+
+    #[cfg(feature = "save_kdbx4")]
+    #[test]
+    fn test_saved_kdbx_xml_uses_kdbx_compatible_timestamps_and_tag_names() {
+        use chrono::NaiveDateTime;
+
+        let mut db = Database::new(Default::default());
+        db.meta.default_username = Some("alice".to_string());
+        db.meta.default_username_changed =
+            Some(NaiveDateTime::parse_from_str("2023-10-05T12:34:56", "%Y-%m-%dT%H:%M:%S").unwrap());
+        db.meta.custom_data.insert(
+            "example".to_string(),
+            crate::db::CustomDataItem {
+                value: Some(crate::db::CustomDataValue::String("value".to_string())),
+                last_modification_time: None,
+            },
+        );
+        db.root.times.creation =
+            Some(NaiveDateTime::parse_from_str("2023-10-05T12:34:56", "%Y-%m-%dT%H:%M:%S").unwrap());
+
+        let mut buffer = Vec::new();
+        let key = DatabaseKey::new().with_password("testing");
+        db.save(&mut buffer, key.clone()).unwrap();
+
+        let xml = String::from_utf8(Database::get_xml(&mut buffer.as_slice(), key).unwrap()).unwrap();
+
+        assert!(xml.contains("<DefaultUserName>alice</DefaultUserName>"), "{xml}");
+        assert!(
+            !xml.contains("<DefaultUsername>"),
+            "unexpected DefaultUsername tag in {xml}"
+        );
+        assert!(
+            xml.contains("<DefaultUserNameChanged>cKSw3A4AAAA=</DefaultUserNameChanged>"),
+            "{xml}"
+        );
+        assert!(xml.contains("<CreationTime>cKSw3A4AAAA=</CreationTime>"), "{xml}");
+        assert!(
+            !xml.contains("<LastModificationTime/>"),
+            "unexpected empty custom-data timestamp tag in {xml}"
+        );
+    }
 }

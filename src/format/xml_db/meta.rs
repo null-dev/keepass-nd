@@ -33,10 +33,10 @@ pub struct Meta {
     #[serde(default, with = "cs_opt_string")]
     database_description_changed: Option<Timestamp>,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, rename = "DefaultUserName", with = "cs_opt_string")]
     default_username: Option<String>,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, rename = "DefaultUserNameChanged", with = "cs_opt_string")]
     default_username_changed: Option<Timestamp>,
 
     #[serde(default, with = "cs_opt_fromstr")]
@@ -66,19 +66,19 @@ pub struct Meta {
     #[serde(default, rename = "RecycleBinUUID", with = "cs_opt_string")]
     recycle_bin_uuid: Option<UUID>,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, rename = "RecycleBinChanged", with = "cs_opt_string")]
     recycle_bin_changed: Option<Timestamp>,
 
     #[serde(default, with = "cs_opt_string")]
     entry_templates_group: Option<UUID>,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, rename = "EntryTemplatesGroupChanged", with = "cs_opt_string")]
     entry_templates_group_changed: Option<Timestamp>,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, rename = "LastSelectedGroup", with = "cs_opt_string")]
     last_selected_group: Option<UUID>,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, rename = "LastTopVisibleGroup", with = "cs_opt_string")]
     last_top_visible_group: Option<UUID>,
 
     #[serde(default, with = "cs_opt_fromstr")]
@@ -87,7 +87,7 @@ pub struct Meta {
     #[serde(default, with = "cs_opt_fromstr")]
     history_max_size: Option<isize>,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, rename = "SettingsChanged", with = "cs_opt_string")]
     settings_changed: Option<Timestamp>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -339,7 +339,7 @@ struct CustomDataItem {
     key: String,
     value: CustomDataValue,
 
-    #[serde(default, with = "cs_opt_string")]
+    #[serde(default, with = "cs_opt_string", skip_serializing_if = "Option::is_none")]
     last_modification_time: Option<Timestamp>,
 }
 
@@ -403,7 +403,12 @@ struct MemoryProtection {
     #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     protect_title: Option<bool>,
 
-    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "ProtectUserName",
+        with = "cs_opt_bool",
+        skip_serializing_if = "Option::is_none"
+    )]
     protect_username: Option<bool>,
 
     #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
@@ -503,7 +508,7 @@ mod tests {
 
         assert_eq!(
             serialized,
-            "<CustomData><Item><Key>example_key</Key><Value>example_value</Value><LastModificationTime>cKSw3A4AAAA=</LastModificationTime></Item><Item><Key>binary_key</Key><Value>AQIDBAU=</Value><LastModificationTime/></Item></CustomData>"
+            "<CustomData><Item><Key>example_key</Key><Value>example_value</Value><LastModificationTime>cKSw3A4AAAA=</LastModificationTime></Item><Item><Key>binary_key</Key><Value>AQIDBAU=</Value></Item></CustomData>"
         );
         assert!(serialized.contains("<Key>example_key</Key>"));
         assert!(serialized.contains("<Value>example_value</Value>"));
@@ -550,12 +555,12 @@ mod tests {
         };
 
         let serialized = quick_xml::se::to_string(&mp).unwrap();
-        assert_eq!(serialized, "<MemoryProtection><ProtectTitle>True</ProtectTitle><ProtectUsername>False</ProtectUsername><ProtectPassword>True</ProtectPassword><ProtectURL>False</ProtectURL><ProtectNotes>True</ProtectNotes></MemoryProtection>");
+        assert_eq!(serialized, "<MemoryProtection><ProtectTitle>True</ProtectTitle><ProtectUserName>False</ProtectUserName><ProtectPassword>True</ProtectPassword><ProtectURL>False</ProtectURL><ProtectNotes>True</ProtectNotes></MemoryProtection>");
     }
 
     #[test]
     fn test_deserialize_memory_protection() {
-        let mp: MemoryProtection = quick_xml::de::from_str( "<MemoryProtection><ProtectTitle>True</ProtectTitle><ProtectUsername>False</ProtectUsername><ProtectPassword>True</ProtectPassword><ProtectURL>False</ProtectURL><ProtectNotes>True</ProtectNotes></MemoryProtection>").unwrap();
+        let mp: MemoryProtection = quick_xml::de::from_str( "<MemoryProtection><ProtectTitle>True</ProtectTitle><ProtectUserName>False</ProtectUserName><ProtectPassword>True</ProtectPassword><ProtectURL>False</ProtectURL><ProtectNotes>True</ProtectNotes></MemoryProtection>").unwrap();
         assert_eq!(mp.protect_title, Some(true));
         assert_eq!(mp.protect_username, Some(false));
         assert_eq!(mp.protect_password, Some(true));
@@ -812,8 +817,8 @@ mod tests {
         assert!(serialized.contains("<DatabaseNameChanged>2023-10-05T12:34:56Z</DatabaseNameChanged>"));
         assert!(serialized.contains("<DatabaseDescription>A test database</DatabaseDescription>"));
         assert!(serialized.contains("<DatabaseDescriptionChanged>cKSw3A4AAAA=</DatabaseDescriptionChanged>"));
-        assert!(serialized.contains("<DefaultUsername>admin</DefaultUsername>"));
-        assert!(serialized.contains("<DefaultUsernameChanged>2023-10-05T12:34:56Z</DefaultUsernameChanged>"));
+        assert!(serialized.contains("<DefaultUserName>admin</DefaultUserName>"));
+        assert!(serialized.contains("<DefaultUserNameChanged>2023-10-05T12:34:56Z</DefaultUserNameChanged>"));
         assert!(serialized.contains("<MaintenanceHistoryDays>30</MaintenanceHistoryDays>"));
         assert!(serialized.contains("<Color>#FF0000</Color>"));
         assert!(serialized.contains("<MasterKeyChanged>cKSw3A4AAAA=</MasterKeyChanged>"));
@@ -845,8 +850,8 @@ mod tests {
             <DatabaseNameChanged>2023-10-05T12:34:56Z</DatabaseNameChanged>
             <DatabaseDescription>A test database</DatabaseDescription>
             <DatabaseDescriptionChanged>cKSw3A4AAAA=</DatabaseDescriptionChanged>
-            <DefaultUsername>admin</DefaultUsername>
-            <DefaultUsernameChanged>2023-10-05T12:34:56Z</DefaultUsernameChanged>
+            <DefaultUserName>admin</DefaultUserName>
+            <DefaultUserNameChanged>2023-10-05T12:34:56Z</DefaultUserNameChanged>
             <MaintenanceHistoryDays>30</MaintenanceHistoryDays>
             <Color>#FF0000</Color>
             <MasterKeyChanged>cKSw3A4AAAA=</MasterKeyChanged>
@@ -854,7 +859,7 @@ mod tests {
             <MasterKeyChangeForce>42</MasterKeyChangeForce>
             <MemoryProtection>
                 <ProtectTitle>True</ProtectTitle>
-                <ProtectUsername>False</ProtectUsername>
+                <ProtectUserName>False</ProtectUserName>
                 <ProtectPassword>True</ProtectPassword>
                 <ProtectURL>False</ProtectURL>
                 <ProtectNotes>True</ProtectNotes>
