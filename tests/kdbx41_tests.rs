@@ -136,8 +136,7 @@ mod kdbx41_tests {
     fn entry_previous_parent_group_uuid_integrity() {
         // Use a UUID with all bytes distinct to catch byte-swapping bugs.
         let ppg = Uuid::from_bytes([
-            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
-            0x32, 0x10,
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
         ]);
 
         let mut db = Database::new(Default::default());
@@ -275,8 +274,7 @@ mod kdbx41_tests {
     fn entry_custom_icon_last_modification_time_roundtrip() {
         let icon_uuid = Uuid::new_v4();
         // Use a timestamp with second precision (sub-second is not stored).
-        let ts =
-            NaiveDateTime::parse_from_str("2024-01-15 12:34:56", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2024-01-15 12:34:56", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         let mut entry = Entry::new();
@@ -296,8 +294,7 @@ mod kdbx41_tests {
     #[test]
     fn entry_custom_icon_all_fields_roundtrip() {
         let icon_uuid = Uuid::new_v4();
-        let ts =
-            NaiveDateTime::parse_from_str("2025-06-01 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2025-06-01 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         let mut entry = Entry::new();
@@ -331,8 +328,7 @@ mod kdbx41_tests {
     #[test]
     fn group_custom_icon_all_fields_roundtrip() {
         let icon_uuid = Uuid::new_v4();
-        let ts =
-            NaiveDateTime::parse_from_str("2025-03-10 09:15:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2025-03-10 09:15:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         let mut group = Group::new("Fancy Group");
@@ -532,10 +528,7 @@ mod kdbx41_tests {
                 "tests/resources/test_db_kdbx4_with_password_argon2id.kdbx",
                 "demopass",
             ),
-            (
-                "tests/resources/test_db_kdbx4_with_password_aes.kdbx",
-                "demopass",
-            ),
+            ("tests/resources/test_db_kdbx4_with_password_aes.kdbx", "demopass"),
         ];
 
         for (path_str, password) in &test_files {
@@ -556,8 +549,7 @@ mod kdbx41_tests {
                     group.name
                 );
                 assert_eq!(
-                    group.previous_parent_group,
-                    None,
+                    group.previous_parent_group, None,
                     "{}: group.previous_parent_group should be None in a 4.0 file",
                     path_str
                 );
@@ -566,8 +558,7 @@ mod kdbx41_tests {
                     // <QualityCheck>False</QualityCheck>, so we don't assert None
                     // here — reading it correctly is the right behaviour.
                     assert_eq!(
-                        entry.previous_parent_group,
-                        None,
+                        entry.previous_parent_group, None,
                         "{}: entry.previous_parent_group should be None in a 4.0 file",
                         path_str
                     );

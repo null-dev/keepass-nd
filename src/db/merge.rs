@@ -102,7 +102,10 @@ impl Database {
 
         // DatabaseDescription — governed by DatabaseDescriptionChanged
         if let Some(other_changed) = other.database_description_changed {
-            let self_changed = self.meta.database_description_changed.unwrap_or_else(Times::epoch);
+            let self_changed = self
+                .meta
+                .database_description_changed
+                .unwrap_or_else(Times::epoch);
             if other_changed > self_changed {
                 self.meta.database_description = other.database_description.clone();
                 self.meta.database_description_changed = Some(other_changed);
@@ -130,7 +133,10 @@ impl Database {
 
         // EntryTemplatesGroup — governed by EntryTemplatesGroupChanged
         if let Some(other_changed) = other.entry_templates_group_changed {
-            let self_changed = self.meta.entry_templates_group_changed.unwrap_or_else(Times::epoch);
+            let self_changed = self
+                .meta
+                .entry_templates_group_changed
+                .unwrap_or_else(Times::epoch);
             if other_changed > self_changed {
                 self.meta.entry_templates_group = other.entry_templates_group;
                 self.meta.entry_templates_group_changed = Some(other_changed);
@@ -814,8 +820,16 @@ impl Entry {
     ) -> Result<(Entry, MergeLog), MergeError> {
         let mut log = MergeLog::default();
 
-        let winner_label = if self_is_destination { "destination" } else { "source" };
-        let loser_label = if self_is_destination { "source" } else { "destination" };
+        let winner_label = if self_is_destination {
+            "destination"
+        } else {
+            "source"
+        };
+        let loser_label = if self_is_destination {
+            "source"
+        } else {
+            "destination"
+        };
 
         let mut source_history = match &other.history {
             Some(h) => h.clone(),
@@ -2307,7 +2321,11 @@ mod merge_tests {
             .warnings
             .iter()
             .any(|w| w.contains("destination database has uncommitted changes"));
-        assert!(warned, "expected warning about destination uncommitted changes; got: {:?}", merge_result.warnings);
+        assert!(
+            warned,
+            "expected warning about destination uncommitted changes; got: {:?}",
+            merge_result.warnings
+        );
 
         // The entry retains the uncommitted title (destination wins)
         let merged = destination_db.root.entry_by_uuid(ENTRY1_ID).unwrap();
@@ -2390,10 +2408,7 @@ mod merge_tests {
 
         destination_db.merge(&source_db).unwrap();
 
-        assert_eq!(
-            destination_db.meta.database_name.as_deref(),
-            Some("NewerName")
-        );
+        assert_eq!(destination_db.meta.database_name.as_deref(), Some("NewerName"));
     }
 
     #[test]
@@ -2450,7 +2465,10 @@ mod merge_tests {
 
         assert_eq!(destination_db.meta.recyclebin_enabled, Some(true));
         assert_eq!(destination_db.meta.recyclebin_uuid, Some(bin_uuid));
-        assert_eq!(destination_db.meta.recyclebin_changed, Some(make_timestamp(2_000_000)));
+        assert_eq!(
+            destination_db.meta.recyclebin_changed,
+            Some(make_timestamp(2_000_000))
+        );
     }
 
     #[test]
@@ -2488,7 +2506,10 @@ mod merge_tests {
         assert_eq!(destination_db.meta.history_max_items, Some(50));
         assert_eq!(destination_db.meta.history_max_size, Some(5_000_000));
         assert_eq!(destination_db.meta.maintenance_history_days, Some(365));
-        assert_eq!(destination_db.meta.settings_changed, Some(make_timestamp(2_000_000)));
+        assert_eq!(
+            destination_db.meta.settings_changed,
+            Some(make_timestamp(2_000_000))
+        );
     }
 
     #[test]
@@ -2533,10 +2554,10 @@ mod merge_tests {
         let mut destination_db = Database::new(Default::default());
         let mut source_db = Database::new(Default::default());
 
-        source_db
-            .meta
-            .custom_data
-            .insert("Plugin_Key".to_string(), make_custom_data_item("value", 1_000_000));
+        source_db.meta.custom_data.insert(
+            "Plugin_Key".to_string(),
+            make_custom_data_item("value", 1_000_000),
+        );
 
         destination_db.merge(&source_db).unwrap();
 
@@ -2553,15 +2574,15 @@ mod merge_tests {
         let mut destination_db = Database::new(Default::default());
         let mut source_db = Database::new(Default::default());
 
-        destination_db
-            .meta
-            .custom_data
-            .insert("Plugin_Key".to_string(), make_custom_data_item("old_value", 1_000_000));
+        destination_db.meta.custom_data.insert(
+            "Plugin_Key".to_string(),
+            make_custom_data_item("old_value", 1_000_000),
+        );
 
-        source_db
-            .meta
-            .custom_data
-            .insert("Plugin_Key".to_string(), make_custom_data_item("new_value", 2_000_000));
+        source_db.meta.custom_data.insert(
+            "Plugin_Key".to_string(),
+            make_custom_data_item("new_value", 2_000_000),
+        );
 
         destination_db.merge(&source_db).unwrap();
 
@@ -2577,15 +2598,15 @@ mod merge_tests {
         let mut destination_db = Database::new(Default::default());
         let mut source_db = Database::new(Default::default());
 
-        destination_db
-            .meta
-            .custom_data
-            .insert("Plugin_Key".to_string(), make_custom_data_item("newer_value", 3_000_000));
+        destination_db.meta.custom_data.insert(
+            "Plugin_Key".to_string(),
+            make_custom_data_item("newer_value", 3_000_000),
+        );
 
-        source_db
-            .meta
-            .custom_data
-            .insert("Plugin_Key".to_string(), make_custom_data_item("older_value", 1_000_000));
+        source_db.meta.custom_data.insert(
+            "Plugin_Key".to_string(),
+            make_custom_data_item("older_value", 1_000_000),
+        );
 
         destination_db.merge(&source_db).unwrap();
 

@@ -24,8 +24,8 @@ mod kdbx4_roundtrip_tests {
     use keepass::{
         config::{CompressionConfig, DatabaseConfig, InnerCipherConfig},
         db::{
-            fields, Attachment, AutoType, AutoTypeAssociation, Color, CustomDataItem,
-            CustomDataValue, Database, Entry, Group, MemoryProtection, Value,
+            fields, Attachment, AutoType, AutoTypeAssociation, Color, CustomDataItem, CustomDataValue,
+            Database, Entry, Group, MemoryProtection, Value,
         },
         DatabaseKey,
     };
@@ -173,7 +173,10 @@ mod kdbx4_roundtrip_tests {
 
         let history = e.history.as_ref().expect("entry should have history");
         let hist_entries = history.get_entries();
-        assert!(!hist_entries.is_empty(), "history should contain at least one entry");
+        assert!(
+            !hist_entries.is_empty(),
+            "history should contain at least one entry"
+        );
         assert_eq!(
             hist_entries[0].get_title(),
             Some("v1"),
@@ -212,8 +215,7 @@ mod kdbx4_roundtrip_tests {
     #[test]
     fn deleted_objects_with_timestamp_roundtrip() {
         let uuid = Uuid::new_v4();
-        let ts =
-            NaiveDateTime::parse_from_str("2024-05-01 10:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2024-05-01 10:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         db.deleted_objects.insert(uuid, Some(ts));
@@ -247,8 +249,7 @@ mod kdbx4_roundtrip_tests {
     fn deleted_objects_multiple_roundtrip() {
         let uuid1 = Uuid::new_v4();
         let uuid2 = Uuid::new_v4();
-        let ts =
-            NaiveDateTime::parse_from_str("2024-06-15 08:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2024-06-15 08:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         db.deleted_objects.insert(uuid1, Some(ts));
@@ -435,15 +436,12 @@ mod kdbx4_roundtrip_tests {
     fn group_default_autotype_sequence_roundtrip() {
         let mut db = Database::new(Default::default());
         let mut group = Group::new("Custom AutoType");
-        group.default_autotype_sequence =
-            Some("{USERNAME}{TAB}{PASSWORD}{ENTER}".to_string());
+        group.default_autotype_sequence = Some("{USERNAME}{TAB}{PASSWORD}{ENTER}".to_string());
         db.root.groups.push(group);
 
         let loaded = roundtrip(db);
         assert_eq!(
-            loaded.root.groups[0]
-                .default_autotype_sequence
-                .as_deref(),
+            loaded.root.groups[0].default_autotype_sequence.as_deref(),
             Some("{USERNAME}{TAB}{PASSWORD}{ENTER}")
         );
     }
@@ -499,10 +497,7 @@ mod kdbx4_roundtrip_tests {
         assert_eq!(at.data_transfer_obfuscation, Some(true));
         assert_eq!(at.associations.len(), 2);
         assert_eq!(at.associations[0].window, "Example App*");
-        assert_eq!(
-            at.associations[0].sequence,
-            "{USERNAME}{TAB}{PASSWORD}{ENTER}"
-        );
+        assert_eq!(at.associations[0].sequence, "{USERNAME}{TAB}{PASSWORD}{ENTER}");
         assert_eq!(at.associations[1].window, "Login – Firefox");
         assert_eq!(at.associations[1].sequence, "{PASSWORD}{ENTER}");
     }
@@ -541,8 +536,7 @@ mod kdbx4_roundtrip_tests {
     /// groups — it must survive the roundtrip.
     #[test]
     fn entry_times_location_changed_roundtrip() {
-        let ts =
-            NaiveDateTime::parse_from_str("2024-03-15 09:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2024-03-15 09:30:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         let mut entry = Entry::new();
@@ -555,8 +549,7 @@ mod kdbx4_roundtrip_tests {
 
     #[test]
     fn group_times_location_changed_roundtrip() {
-        let ts =
-            NaiveDateTime::parse_from_str("2024-07-04 12:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2024-07-04 12:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         let mut group = Group::new("Relocated");
@@ -581,8 +574,7 @@ mod kdbx4_roundtrip_tests {
 
     #[test]
     fn entry_times_expiry_roundtrip() {
-        let expiry =
-            NaiveDateTime::parse_from_str("2030-12-31 23:59:59", "%Y-%m-%d %H:%M:%S").unwrap();
+        let expiry = NaiveDateTime::parse_from_str("2030-12-31 23:59:59", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         let mut entry = Entry::new();
@@ -601,8 +593,7 @@ mod kdbx4_roundtrip_tests {
     /// KDBX 4 supports timestamps on individual custom-data items for entries.
     #[test]
     fn entry_custom_data_with_timestamp_roundtrip() {
-        let ts =
-            NaiveDateTime::parse_from_str("2024-06-15 14:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2024-06-15 14:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         let mut entry = Entry::new();
@@ -654,8 +645,7 @@ mod kdbx4_roundtrip_tests {
     /// Group custom data with timestamps must survive.
     #[test]
     fn group_custom_data_with_timestamp_roundtrip() {
-        let ts =
-            NaiveDateTime::parse_from_str("2024-08-20 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2024-08-20 08:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         let mut group = Group::new("Annotated Group");
@@ -679,8 +669,7 @@ mod kdbx4_roundtrip_tests {
     /// Meta-level custom data with timestamps must survive.
     #[test]
     fn meta_custom_data_with_timestamp_roundtrip() {
-        let ts =
-            NaiveDateTime::parse_from_str("2024-09-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let ts = NaiveDateTime::parse_from_str("2024-09-01 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
 
         let mut db = Database::new(Default::default());
         db.meta.custom_data.insert(
@@ -713,10 +702,7 @@ mod kdbx4_roundtrip_tests {
         db.meta.database_description = Some("A description of the test DB.".to_string());
 
         let loaded = roundtrip(db);
-        assert_eq!(
-            loaded.meta.database_name.as_deref(),
-            Some("My Test Database")
-        );
+        assert_eq!(loaded.meta.database_name.as_deref(), Some("My Test Database"));
         assert_eq!(
             loaded.meta.database_description.as_deref(),
             Some("A description of the test DB.")
@@ -819,10 +805,7 @@ mod kdbx4_roundtrip_tests {
         db.root.entries.push(entry);
 
         let loaded = roundtrip(db);
-        assert_eq!(
-            loaded.root.entries[0].get_title(),
-            Some("Uncompressed Entry")
-        );
+        assert_eq!(loaded.root.entries[0].get_title(), Some("Uncompressed Entry"));
         assert_eq!(loaded.root.entries[0].get_password(), Some("pass123"));
     }
 
@@ -841,10 +824,7 @@ mod kdbx4_roundtrip_tests {
         db.root.entries.push(entry);
 
         let loaded = roundtrip(db);
-        assert_eq!(
-            loaded.root.entries[0].get_title(),
-            Some("Salsa20 Entry")
-        );
+        assert_eq!(loaded.root.entries[0].get_title(), Some("Salsa20 Entry"));
         assert_eq!(
             loaded.root.entries[0].get_password(),
             Some("salsa-secret"),
@@ -871,14 +851,8 @@ mod kdbx4_roundtrip_tests {
         db.root.entries.push(entry);
 
         let loaded = roundtrip(db);
-        assert_eq!(
-            loaded.root.entries[0].get_title(),
-            Some("Plain Cipher Entry")
-        );
-        assert_eq!(
-            loaded.root.entries[0].get_password(),
-            Some("not-secret-plain")
-        );
+        assert_eq!(loaded.root.entries[0].get_title(), Some("Plain Cipher Entry"));
+        assert_eq!(loaded.root.entries[0].get_password(), Some("not-secret-plain"));
     }
 
     /// Databases with no compression and Salsa20 inner cipher together.
