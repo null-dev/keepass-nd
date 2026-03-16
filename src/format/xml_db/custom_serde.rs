@@ -88,6 +88,39 @@ pub mod cs_opt_bool {
     }
 }
 
+/// Optional auto-type obfuscation values encoded as "0"/"1".
+pub mod cs_opt_autotype_obfuscation {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(data: &Option<bool>, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match data {
+            Some(true) => s.serialize_str("1"),
+            Some(false) => s.serialize_str("0"),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = Option::<String>::deserialize(d)?;
+
+        match opt.as_deref().map(str::trim) {
+            Some("") | None => Ok(None),
+            Some("1") | Some("true") | Some("True") => Ok(Some(true)),
+            Some("0") | Some("false") | Some("False") => Ok(Some(false)),
+            Some(other) => Err(serde::de::Error::custom(format!(
+                "Invalid auto-type obfuscation value: {}",
+                other
+            ))),
+        }
+    }
+}
+
 /// Optional value that implements FromStr that may be missing empty, e.g. numbers
 pub mod cs_opt_fromstr {
     use std::str::FromStr;
