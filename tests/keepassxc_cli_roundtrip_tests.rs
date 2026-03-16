@@ -38,6 +38,12 @@ mod keepassxc_cli_roundtrip_tests {
     }
 
     #[derive(Debug, PartialEq, Eq)]
+    struct DeletedObjectSnapshot {
+        uuid: String,
+        deletion_time: Option<String>,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
     struct MetaSnapshot {
         generator: Option<String>,
         database_name: Option<String>,
@@ -220,6 +226,23 @@ mod keepassxc_cli_roundtrip_tests {
     struct ExportRootXml {
         #[serde(rename = "Group")]
         group: ExportGroupXml,
+        #[serde(default, rename = "DeletedObjects")]
+        deleted_objects: Option<ExportDeletedObjectsXml>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ExportDeletedObjectsXml {
+        #[serde(rename = "DeletedObject", default)]
+        objects: Vec<ExportDeletedObjectXml>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct ExportDeletedObjectXml {
+        #[serde(rename = "UUID")]
+        uuid: String,
+        #[serde(default)]
+        deletion_time: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -428,6 +451,41 @@ mod keepassxc_cli_roundtrip_tests {
         assert_roundtrip_matches_keepassxc_export(&binary, &original, &rewritten);
         assert_show_roundtrip_matches(&binary, &original, &rewritten, &expectations.show_paths);
         assert_attachment_exports_match(&binary, &rewritten, &expectations.attachments);
+    }
+
+    #[test]
+    fn keepassxc_cli_roundtrip_preserves_deleted_objects() {
+        let Some(binary) = require_keepassxc_cli() else {
+            return;
+        };
+
+        let tempdir = TempDir::new().expect("failed to create tempdir");
+        let original = tempdir.path().join("deleted-objects-original.kdbx");
+        let rewritten = tempdir.path().join("deleted-objects-rewritten.kdbx");
+
+        create_database(&binary, &original);
+        add_entry(
+            &binary,
+            &original,
+            "TrashMe",
+            "delete-me",
+            "https://example.invalid",
+            "to-be-removed",
+            "trashpass",
+        );
+
+        // KeePassXC first moves deleted entries into the recycle bin. Deleting
+        // the recycled entry records it in DeletedObjects.
+        remove_entry(&binary, &original, "TrashMe");
+        remove_entry(&binary, &original, "Recycle Bin/TrashMe");
+
+        let before = deleted_objects_snapshot(&binary, &original);
+        assert_eq!(before.len(), 1, "expected one deleted object in source database");
+
+        roundtrip_with_library(&original, &rewritten);
+
+        let after = deleted_objects_snapshot(&binary, &rewritten);
+        assert_eq!(after, before, "deleted objects changed after roundtrip");
     }
 
     fn build_recycle_bin_fixture(binary: &OsString, db_path: &Path) -> FixtureExpectations {
@@ -754,6 +812,15 @@ mod keepassxc_cli_roundtrip_tests {
     }
 
     fn export_snapshot(binary: &OsString, db_path: &Path) -> DatabaseSnapshot {
+        let xml = export_xml(binary, db_path);
+        parse_snapshot(&xml)
+    }
+
+    fn deleted_objects_snapshot(binary: &OsString, db_path: &Path) -> Vec<DeletedObjectSnapshot> {
+        parse_deleted_objects(&export_xml(binary, db_path))
+    }
+
+    fn export_xml(binary: &OsString, db_path: &Path) -> String {
         let args = vec![
             "export".to_string(),
             "-q".to_string(),
@@ -761,9 +828,8 @@ mod keepassxc_cli_roundtrip_tests {
             "xml".to_string(),
             path_to_string(db_path),
         ];
-        let xml = String::from_utf8(run_keepassxc(binary, &args, &database_unlock_stdin()))
-            .expect("export output was not valid UTF-8");
-        parse_snapshot(&xml)
+        String::from_utf8(run_keepassxc(binary, &args, &database_unlock_stdin()))
+            .expect("export output was not valid UTF-8")
     }
 
     fn roundtrip_with_library(original: &Path, rewritten: &Path) {
@@ -783,6 +849,23 @@ mod keepassxc_cli_roundtrip_tests {
             meta: normalize_meta(meta),
             root: normalize_group(root.group),
         }
+    }
+
+    fn parse_deleted_objects(xml: &str) -> Vec<DeletedObjectSnapshot> {
+        let ExportXml { root, .. } = from_str(xml).expect("failed to parse KeePassXC export");
+
+        root.deleted_objects
+            .map(|deleted_objects| {
+                deleted_objects
+                    .objects
+                    .into_iter()
+                    .map(|deleted_object| DeletedObjectSnapshot {
+                        uuid: deleted_object.uuid,
+                        deletion_time: empty_to_none(deleted_object.deletion_time),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn normalize_meta(meta: ExportMetaXml) -> MetaSnapshot {

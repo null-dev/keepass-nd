@@ -222,6 +222,7 @@ pub struct DeletedObjects {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct DeletedObject {
     #[serde(rename = "UUID")]
     uuid: UUID,
@@ -255,5 +256,22 @@ mod tests {
         ]));
         let serialized = quick_xml::se::to_string(&Test(uuid)).unwrap();
         assert_eq!(serialized, "<Test>AAECAwQFBgcICQoLDA0ODw==</Test>");
+    }
+
+    #[test]
+    fn test_deleted_object_uses_pascal_case_deletion_time() {
+        let deleted_object = DeletedObject {
+            uuid: UUID(Uuid::from_bytes([
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+            ])),
+            deletion_time: Some(Timestamp::new_base64(
+                chrono::NaiveDateTime::parse_from_str("2024-05-01T10:00:00", "%Y-%m-%dT%H:%M:%S").unwrap(),
+            )),
+        };
+
+        let serialized = quick_xml::se::to_string(&Test(deleted_object)).unwrap();
+        assert!(serialized.contains("<UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>"));
+        assert!(serialized.contains("<DeletionTime>"));
+        assert!(!serialized.contains("<deletion_time>"));
     }
 }
