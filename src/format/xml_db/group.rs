@@ -36,16 +36,16 @@ pub struct Group {
     #[serde(default)]
     pub times: Option<Times>,
 
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     pub is_expanded: Option<bool>,
 
     #[serde(default, with = "cs_opt_string")]
     pub default_auto_type_sequence: Option<String>,
 
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     pub enable_auto_type: Option<bool>,
 
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     pub enable_searching: Option<bool>,
 
     #[serde(default, with = "cs_opt_string")]
@@ -59,7 +59,11 @@ pub struct Group {
     pub tags: Option<String>,
 
     /// UUID of the group this group was moved from (KDBX 4.1+)
-    #[serde(default, rename = "PreviousParentGroup", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "PreviousParentGroup",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub previous_parent_group: Option<UUID>,
 
     #[serde(default, rename = "$value")]
@@ -300,7 +304,8 @@ mod tests {
         let serialized = quick_xml::se::to_string(&group).unwrap();
         assert!(
             serialized.contains("<Tags>alpha,beta</Tags>"),
-            "Tags missing in: {}", serialized
+            "Tags missing in: {}",
+            serialized
         );
     }
 
@@ -314,7 +319,33 @@ mod tests {
         let serialized = quick_xml::se::to_string(&group).unwrap();
         assert!(
             !serialized.contains("<Tags>"),
-            "Tags element should be absent when None: {}", serialized
+            "Tags element should be absent when None: {}",
+            serialized
+        );
+    }
+
+    #[test]
+    fn test_serialize_group_nullable_bools_none_omitted() {
+        let xml_in = r#"<Group>
+            <UUID>AAECAwQFBgcICQoLDA0ODw==</UUID>
+            <Name>Plain</Name>
+        </Group>"#;
+        let group: Test<Group> = quick_xml::de::from_str(xml_in).unwrap();
+        let serialized = quick_xml::se::to_string(&group).unwrap();
+        assert!(
+            !serialized.contains("<IsExpanded/>"),
+            "IsExpanded should be absent when None: {}",
+            serialized
+        );
+        assert!(
+            !serialized.contains("<EnableAutoType/>"),
+            "EnableAutoType should be absent when None: {}",
+            serialized
+        );
+        assert!(
+            !serialized.contains("<EnableSearching/>"),
+            "EnableSearching should be absent when None: {}",
+            serialized
         );
     }
 
@@ -328,11 +359,13 @@ mod tests {
             <PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>
         </Group>"#;
         let group: Test<Group> = quick_xml::de::from_str(xml).unwrap();
-        let ppg = group.0.previous_parent_group.expect("expected PreviousParentGroup");
+        let ppg = group
+            .0
+            .previous_parent_group
+            .expect("expected PreviousParentGroup");
         assert_eq!(
             ppg.0.as_bytes(),
-            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-              0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
+            &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]
         );
     }
 
@@ -356,10 +389,9 @@ mod tests {
         let group: Test<Group> = quick_xml::de::from_str(xml_in).unwrap();
         let serialized = quick_xml::se::to_string(&group).unwrap();
         assert!(
-            serialized.contains(
-                "<PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>"
-            ),
-            "PreviousParentGroup missing in: {}", serialized
+            serialized.contains("<PreviousParentGroup>AAECAwQFBgcICQoLDA0ODw==</PreviousParentGroup>"),
+            "PreviousParentGroup missing in: {}",
+            serialized
         );
     }
 
@@ -373,7 +405,8 @@ mod tests {
         let serialized = quick_xml::se::to_string(&group).unwrap();
         assert!(
             !serialized.contains("PreviousParentGroup"),
-            "PreviousParentGroup should be absent when None: {}", serialized
+            "PreviousParentGroup should be absent when None: {}",
+            serialized
         );
     }
 }

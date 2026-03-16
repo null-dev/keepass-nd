@@ -17,7 +17,7 @@ pub struct Times {
     #[serde(default, with = "cs_opt_string")]
     pub expiry_time: Option<Timestamp>,
 
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     pub expires: Option<bool>,
     #[serde(default, with = "cs_opt_fromstr")]
     pub usage_count: Option<usize>,
@@ -100,6 +100,26 @@ mod tests {
         assert_eq!(
             times.location_changed.unwrap().time,
             chrono::NaiveDateTime::parse_from_str("2023-10-08T12:34:56", "%Y-%m-%dT%H:%M:%S").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_serialize_times_expires_none_omitted() {
+        let times = Times {
+            creation_time: None,
+            last_modification_time: None,
+            last_access_time: None,
+            expiry_time: None,
+            expires: None,
+            usage_count: None,
+            location_changed: None,
+        };
+
+        let serialized = quick_xml::se::to_string(&times).unwrap();
+        assert!(
+            !serialized.contains("<Expires/>"),
+            "Expires should be absent when None: {}",
+            serialized
         );
     }
 }

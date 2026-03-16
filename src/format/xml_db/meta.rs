@@ -60,7 +60,7 @@ pub struct Meta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_icons: Option<CustomIcons>,
 
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     recycle_bin_enabled: Option<bool>,
 
     #[serde(default, rename = "RecycleBinUUID", with = "cs_opt_string")]
@@ -190,10 +190,20 @@ pub struct Binary {
     #[serde(rename = "@ID")]
     pub id: usize,
 
-    #[serde(rename = "@Compressed", default, with = "cs_opt_bool")]
+    #[serde(
+        rename = "@Compressed",
+        default,
+        with = "cs_opt_bool",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub compressed: Option<bool>,
 
-    #[serde(rename = "@Protected", default, with = "cs_opt_bool")]
+    #[serde(
+        rename = "@Protected",
+        default,
+        with = "cs_opt_bool",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub protected: Option<bool>,
 }
 
@@ -390,19 +400,24 @@ impl Serialize for CustomDataValue {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct MemoryProtection {
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     protect_title: Option<bool>,
 
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     protect_username: Option<bool>,
 
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     protect_password: Option<bool>,
 
-    #[serde(default, with = "cs_opt_bool", rename = "ProtectURL")]
+    #[serde(
+        default,
+        with = "cs_opt_bool",
+        rename = "ProtectURL",
+        skip_serializing_if = "Option::is_none"
+    )]
     protect_url: Option<bool>,
 
-    #[serde(default, with = "cs_opt_bool")]
+    #[serde(default, with = "cs_opt_bool", skip_serializing_if = "Option::is_none")]
     protect_notes: Option<bool>,
 }
 
@@ -607,10 +622,7 @@ mod tests {
         </Icon>"#;
         let icon: Icon = quick_xml::de::from_str(xml).unwrap();
         let ts = icon.last_modification_time.unwrap();
-        assert_eq!(
-            ts.time,
-            NaiveDateTime::from_str("2023-10-05T12:34:56").unwrap()
-        );
+        assert_eq!(ts.time, NaiveDateTime::from_str("2023-10-05T12:34:56").unwrap());
     }
 
     #[test]
@@ -640,11 +652,13 @@ mod tests {
         let serialized = quick_xml::se::to_string(&icon).unwrap();
         assert!(
             serialized.contains("<Name>Named Icon</Name>"),
-            "Name missing in: {}", serialized
+            "Name missing in: {}",
+            serialized
         );
         assert!(
             !serialized.contains("LastModificationTime"),
-            "LastModificationTime should be absent when None: {}", serialized
+            "LastModificationTime should be absent when None: {}",
+            serialized
         );
     }
 
@@ -663,11 +677,13 @@ mod tests {
         let serialized = quick_xml::se::to_string(&icon).unwrap();
         assert!(
             serialized.contains("<LastModificationTime>cKSw3A4AAAA=</LastModificationTime>"),
-            "LastModificationTime missing in: {}", serialized
+            "LastModificationTime missing in: {}",
+            serialized
         );
         assert!(
             !serialized.contains("<Name>"),
-            "Name should be absent when None: {}", serialized
+            "Name should be absent when None: {}",
+            serialized
         );
     }
 
@@ -983,6 +999,73 @@ mod tests {
         assert_eq!(
             cd.items[1].last_modification_time.as_ref().unwrap().time,
             NaiveDateTime::from_str("2023-10-05T12:34:56").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_serialize_meta_optional_bools_none_omitted() {
+        let meta = Meta {
+            generator: Some("TestGenerator".to_string()),
+            database_name: None,
+            database_name_changed: None,
+            database_description: None,
+            database_description_changed: None,
+            default_username: None,
+            default_username_changed: None,
+            maintenance_history_days: None,
+            color: None,
+            master_key_changed: None,
+            master_key_change_rec: None,
+            master_key_change_force: None,
+            memory_protection: Some(MemoryProtection {
+                protect_title: None,
+                protect_username: None,
+                protect_password: None,
+                protect_url: None,
+                protect_notes: None,
+            }),
+            custom_icons: None,
+            recycle_bin_enabled: None,
+            recycle_bin_uuid: None,
+            recycle_bin_changed: None,
+            entry_templates_group: None,
+            entry_templates_group_changed: None,
+            last_selected_group: None,
+            last_top_visible_group: None,
+            history_max_items: None,
+            history_max_size: None,
+            settings_changed: None,
+            binaries: Some(Binaries {
+                binaries: vec![Binary {
+                    id: 0,
+                    value: base64_engine::STANDARD.encode([1, 2, 3]),
+                    compressed: None,
+                    protected: None,
+                }],
+            }),
+            custom_data: None,
+        };
+
+        let serialized = quick_xml::se::to_string(&meta).unwrap();
+        assert!(
+            !serialized.contains("<RecycleBinEnabled/>"),
+            "RecycleBinEnabled should be absent when None: {}",
+            serialized
+        );
+        assert!(
+            !serialized.contains("<ProtectTitle/>"),
+            "ProtectTitle should be absent when None: {}",
+            serialized
+        );
+        assert!(
+            !serialized.contains(r#"Compressed="""#),
+            "Compressed attribute should be absent when None: {}",
+            serialized
+        );
+        assert!(
+            !serialized.contains(r#"Protected="""#),
+            "Protected attribute should be absent when None: {}",
+            serialized
         );
     }
 }
