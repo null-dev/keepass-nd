@@ -311,7 +311,11 @@ impl KdfConfig {
 
         match self {
             KdfConfig::Aes { rounds } => {
-                vd.set(KDF_ID, KDF_AES_KDBX4.to_vec());
+                // Writes the legacy KDBX3 AES UUID even in KDBX4 files
+                // for compatibility with other KeePass clients.
+                // KeePassXC does something similar, see:
+                // https://github.com/keepassxreboot/keepassxc/blob/379be00127db60b1ddee9c67f4bfc49c15db8236/src/crypto/kdf/AesKdf.cpp#L55
+                vd.set(KDF_ID, KDF_AES_KDBX3.to_vec());
                 vd.set(KDF_ROUNDS, *rounds);
                 vd.set(KDF_SEED, seed.to_vec());
             }

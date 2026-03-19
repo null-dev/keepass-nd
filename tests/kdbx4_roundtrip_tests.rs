@@ -22,22 +22,67 @@
 mod kdbx4_roundtrip_tests {
     use chrono::NaiveDateTime;
     use keepass::{
-        config::{CompressionConfig, DatabaseConfig, InnerCipherConfig},
+        config::{CompressionConfig, DatabaseConfig, InnerCipherConfig, KdfConfig},
         db::{
             fields, Attachment, AutoType, AutoTypeAssociation, Color, CustomDataItem, CustomDataValue,
             Database, Entry, Group, MemoryProtection, Value,
         },
         DatabaseKey,
     };
+    use std::convert::TryInto;
     use uuid::Uuid;
 
     const PASSWORD: &str = "kdbx4-roundtrip-test";
+    const KDF_AES_KDBX3_UUID: [u8; 16] = [
+        0xc9, 0xd9, 0xf3, 0x9a, 0x62, 0x8a, 0x44, 0x60, 0xbf, 0x74, 0x0d, 0x08, 0xc1, 0x8a, 0x4f, 0xea,
+    ];
 
     fn roundtrip(db: Database) -> Database {
         let key = DatabaseKey::new().with_password(PASSWORD);
         let mut buf = Vec::new();
         db.save(&mut buf, key.clone()).expect("save failed");
         Database::open(&mut buf.as_slice(), key).expect("open failed")
+    }
+
+    fn extract_kdf_uuid(saved_db: &[u8]) -> Vec<u8> {
+        let mut pos = 12;
+
+        loop {
+            let field_type = saved_db[pos];
+            let field_len = u32::from_le_bytes(saved_db[(pos + 1)..(pos + 5)].try_into().unwrap()) as usize;
+            let field_value = &saved_db[(pos + 5)..(pos + 5 + field_len)];
+            pos += 5 + field_len;
+
+            if field_type == 11 {
+                let mut vd_pos = 2;
+                while field_value[vd_pos] != 0 {
+                    let value_type = field_value[vd_pos];
+                    vd_pos += 1;
+
+                    let key_len =
+                        u32::from_le_bytes(field_value[vd_pos..(vd_pos + 4)].try_into().unwrap()) as usize;
+                    vd_pos += 4;
+
+                    let key = &field_value[vd_pos..(vd_pos + key_len)];
+                    vd_pos += key_len;
+
+                    let value_len =
+                        u32::from_le_bytes(field_value[vd_pos..(vd_pos + 4)].try_into().unwrap()) as usize;
+                    vd_pos += 4;
+
+                    let value = &field_value[vd_pos..(vd_pos + value_len)];
+                    vd_pos += value_len;
+
+                    if value_type == 0x42 && key == b"$UUID" {
+                        return value.to_vec();
+                    }
+                }
+            }
+
+            if field_type == 0 {
+                panic!("KDF parameters missing from saved database header");
+            }
+        }
     }
 
     // ── Binary attachments (KDBX4 inner-header feature) ──────────────────────
@@ -873,5 +918,20 @@ mod kdbx4_roundtrip_tests {
             loaded.root.entries[0].get_password(),
             Some("combined-config-pass")
         );
+    }
+
+    #[test]
+    fn aes_kdf_uses_legacy_uuid_for_compatibility() {
+        let config = DatabaseConfig {
+            kdf_config: KdfConfig::Aes { rounds: 10 },
+            ..Default::default()
+        };
+        let db = Database::new(config);
+        let key = DatabaseKey::new().with_password(PASSWORD);
+        let mut buf = Vec::new();
+
+        db.save(&mut buf, key).expect("save failed");
+
+        assert_eq!(extract_kdf_uuid(&buf), KDF_AES_KDBX3_UUID);
     }
 }
