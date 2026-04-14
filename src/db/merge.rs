@@ -899,10 +899,15 @@ impl Entry {
         let mut self_without_times = self.clone();
         self_without_times.times = new_times.clone();
         self_without_times.previous_parent_group = None;
+        // KeePassXC refreshes _LAST_MODIFIED in entry CustomData when it writes a
+        // database (e.g. for TOTP entries) without bumping Times.LastModificationTime.
+        // Treat this marker as a write-side artefact, not user-visible content change.
+        self_without_times.custom_data.remove("_LAST_MODIFIED");
 
         let mut other_without_times = other_entry.clone();
         other_without_times.times = new_times.clone();
         other_without_times.previous_parent_group = None;
+        other_without_times.custom_data.remove("_LAST_MODIFIED");
 
         !self_without_times.eq(&other_without_times)
     }

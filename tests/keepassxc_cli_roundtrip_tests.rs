@@ -9,7 +9,10 @@ mod keepassxc_cli_roundtrip_tests {
         process::{Command, Stdio},
     };
 
-    use keepass::{Database, DatabaseKey};
+    use keepass::{
+        db::{CustomDataItem, CustomDataValue},
+        Database, DatabaseKey,
+    };
     use quick_xml::de::from_str;
     use serde::Deserialize;
     use tempfile::TempDir;
@@ -486,6 +489,147 @@ mod keepassxc_cli_roundtrip_tests {
 
         let after = deleted_objects_snapshot(&binary, &rewritten);
         assert_eq!(after, before, "deleted objects changed after roundtrip");
+    }
+
+    // KeePassXC maintains a per-entry `_LAST_MODIFIED` marker in entry CustomData for
+    // entries that have TOTP (OTP) configuration.  When KeePassXC writes a database it
+    // refreshes this marker to the current wall-clock time, but it does NOT always bump
+    // the entry's `Times.LastModificationTime`.  If the same database is written by
+    // KeePassXC at two different moments, the two resulting files contain entries with
+    // identical `LastModificationTime` values but different `_LAST_MODIFIED` strings.
+    //
+    // Our merge algorithm relies on `LastModificationTime` to decide which side is
+    // newer, and flags identical timestamps with divergent content as an error
+    // (`MergeError::EntryModificationTimeNotUpdated`).  This test pins that failure.
+    //
+    // The test creates the scenario programmatically (via our library) to simulate
+    // exactly what KeePassXC does, and uses `keepassxc-cli` to seed the initial
+    // database so the test is anchored to a real KeePassXC-created file.
+    #[test]
+    #[cfg(feature = "_merge")]
+    fn keepassxc_entry_custom_data_last_modified_without_modification_time_causes_merge_failure() {
+        let Some(binary) = require_keepassxc_cli() else {
+            return;
+        };
+
+        let tempdir = TempDir::new().expect("failed to create tempdir");
+        let db_base = tempdir.path().join("last-modified-base.kdbx");
+        let db_a = tempdir.path().join("last-modified-a.kdbx");
+        let db_b = tempdir.path().join("last-modified-b.kdbx");
+
+        // Step 1 – use keepassxc-cli to create a real database with one entry.
+        // keepassxc-cli creates KDBX3.1 databases; our library only saves KDBX4.
+        // Adding and immediately removing a dummy entry triggers KeePassXC's internal
+        // KDBX3→KDBX4 format upgrade, after which our library can save the file.
+        create_database(&binary, &db_base);
+        add_entry(
+            &binary,
+            &db_base,
+            "Service",
+            "user",
+            "https://example.com",
+            "notes",
+            "pass",
+        );
+        add_entry(
+            &binary,
+            &db_base,
+            "Upgrade",
+            "x",
+            "https://upgrade.example",
+            "",
+            "upgradepass",
+        );
+        remove_entry(&binary, &db_base, "Upgrade");
+
+        // Step 2 – read the database with our library and inject _LAST_MODIFIED into
+        // the entry's CustomData, exactly as KeePassXC does for TOTP entries.
+        // We write two snapshots:
+        //   DB_B  –  the "old" state, _LAST_MODIFIED = T1
+        //   DB_A  –  the "new write" state, _LAST_MODIFIED = T2, same LastModificationTime
+        {
+            let key = DatabaseKey::new().with_password(TEST_PASSWORD);
+            let mut f = File::open(&db_base).expect("failed to open base database");
+            let mut db = Database::open(&mut f, key.clone()).expect("library failed to open base database");
+
+            // Locate the entry and stamp _LAST_MODIFIED = T1 (the "first write" time).
+            for entry in &mut db.root.entries {
+                if entry.get_title() == Some("Service") {
+                    entry.custom_data.insert(
+                        "_LAST_MODIFIED".to_string(),
+                        CustomDataItem {
+                            value: Some(CustomDataValue::String(
+                                "Mon Jan  1 00:00:00 2024 GMT".to_string(),
+                            )),
+                            last_modification_time: None,
+                        },
+                    );
+                    // Deliberately do NOT call entry.update_history() – this mirrors
+                    // KeePassXC's behaviour of refreshing _LAST_MODIFIED without touching
+                    // Times.LastModificationTime.
+                }
+            }
+
+            // DB_B represents a copy of the database that was NOT rewritten by KeePassXC
+            // after the _LAST_MODIFIED marker was first set.
+            let mut out = File::create(&db_b).expect("failed to create db_b");
+            db.save(&mut out, key.clone()).expect("library failed to save db_b");
+
+            // Now simulate KeePassXC rewriting the database at a later time: it updates
+            // _LAST_MODIFIED to T2 but leaves Times.LastModificationTime unchanged.
+            for entry in &mut db.root.entries {
+                if entry.get_title() == Some("Service") {
+                    entry.custom_data.insert(
+                        "_LAST_MODIFIED".to_string(),
+                        CustomDataItem {
+                            value: Some(CustomDataValue::String(
+                                "Tue Jan  2 00:00:00 2024 GMT".to_string(),
+                            )),
+                            last_modification_time: None,
+                        },
+                    );
+                }
+            }
+
+            // DB_A is the database that was last touched by KeePassXC.
+            let mut out = File::create(&db_a).expect("failed to create db_a");
+            db.save(&mut out, key).expect("library failed to save db_a");
+        }
+
+        // Step 3 – verify both databases are valid and readable by keepassxc-cli, which
+        // anchors this test to real KeePassXC compatibility.
+        let snapshot_a = export_snapshot(&binary, &db_a);
+        let snapshot_b = export_snapshot(&binary, &db_b);
+
+        // The two snapshots are equal when _LAST_MODIFIED is excluded (normalize_custom_data
+        // already filters that key), confirming the only difference is the marker itself.
+        assert_eq!(
+            snapshot_a, snapshot_b,
+            "snapshots should be identical except for _LAST_MODIFIED"
+        );
+
+        // Step 4 – attempt to merge DB_A (KeePassXC-rewritten) into DB_B (the stale copy).
+        let key = DatabaseKey::new().with_password(TEST_PASSWORD);
+        let mut f_a = File::open(&db_a).expect("failed to open db_a");
+        let db_a_loaded =
+            Database::open(&mut f_a, key.clone()).expect("library failed to open db_a");
+
+        let mut f_b = File::open(&db_b).expect("failed to open db_b");
+        let mut db_b_loaded =
+            Database::open(&mut f_b, key.clone()).expect("library failed to open db_b");
+
+        // The merge should succeed: the entries are semantically identical; only the
+        // KeePassXC-internal _LAST_MODIFIED marker differs.
+        //
+        // BUG: this currently fails with EntryModificationTimeNotUpdated because our
+        // merge algorithm treats any content divergence at the same LastModificationTime
+        // as an error, without special-casing _LAST_MODIFIED.
+        let result = db_b_loaded.merge(&db_a_loaded);
+        assert!(
+            result.is_ok(),
+            "merge should succeed but failed: {:?}",
+            result.unwrap_err()
+        );
     }
 
     fn build_recycle_bin_fixture(binary: &OsString, db_path: &Path) -> FixtureExpectations {
