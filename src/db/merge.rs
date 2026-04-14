@@ -745,12 +745,17 @@ impl Group {
         self_purged.groups.clear();
         self_purged.entries.clear();
         self_purged.previous_parent_group = None;
+        // KeePassXC refreshes _LAST_MODIFIED in group CustomData without bumping
+        // Times.LastModificationTime, mirroring the same behaviour for entries.
+        self_purged.custom_data.remove("_LAST_MODIFIED");
 
         let mut other_purged = other.clone();
         other_purged.times = new_times.clone();
         other_purged.groups.clear();
         other_purged.entries.clear();
         other_purged.previous_parent_group = None;
+        other_purged.custom_data.remove("_LAST_MODIFIED");
+
         !self_purged.eq(&other_purged)
     }
 }

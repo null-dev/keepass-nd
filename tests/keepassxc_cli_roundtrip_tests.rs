@@ -632,6 +632,107 @@ mod keepassxc_cli_roundtrip_tests {
         );
     }
 
+    // KeePassXC can also write `_LAST_MODIFIED` into a *group's* CustomData and refresh
+    // it on each database write without bumping `Times.LastModificationTime`, for the same
+    // reasons it does so for entries.  The group merge path has an identical divergence
+    // check (`GroupModificationTimeNotUpdated`), so the same class of spurious failure
+    // can occur.  This test pins that failure and verifies the fix.
+    #[test]
+    #[cfg(feature = "_merge")]
+    fn keepassxc_group_custom_data_last_modified_without_modification_time_causes_merge_failure() {
+        let Some(binary) = require_keepassxc_cli() else {
+            return;
+        };
+
+        let tempdir = TempDir::new().expect("failed to create tempdir");
+        let db_base = tempdir.path().join("group-last-modified-base.kdbx");
+        let db_a = tempdir.path().join("group-last-modified-a.kdbx");
+        let db_b = tempdir.path().join("group-last-modified-b.kdbx");
+
+        // Step 1 – use keepassxc-cli to create a KDBX4 database with a subgroup.
+        // Adding then removing a dummy entry triggers the KDBX3→KDBX4 upgrade so our
+        // library can save the file afterward.
+        create_database(&binary, &db_base);
+        mkdir(&binary, &db_base, "Services");
+        add_entry(
+            &binary,
+            &db_base,
+            "Upgrade",
+            "x",
+            "https://upgrade.example",
+            "",
+            "upgradepass",
+        );
+        remove_entry(&binary, &db_base, "Upgrade");
+
+        // Step 2 – read with our library and inject _LAST_MODIFIED into the group's
+        // CustomData at two different timestamps without touching LastModificationTime.
+        {
+            let key = DatabaseKey::new().with_password(TEST_PASSWORD);
+            let mut f = File::open(&db_base).expect("failed to open base database");
+            let mut db = Database::open(&mut f, key.clone()).expect("library failed to open base database");
+
+            for group in &mut db.root.groups {
+                if group.name == "Services" {
+                    group.custom_data.insert(
+                        "_LAST_MODIFIED".to_string(),
+                        CustomDataItem {
+                            value: Some(CustomDataValue::String(
+                                "Mon Jan  1 00:00:00 2024 GMT".to_string(),
+                            )),
+                            last_modification_time: None,
+                        },
+                    );
+                }
+            }
+
+            let mut out = File::create(&db_b).expect("failed to create db_b");
+            db.save(&mut out, key.clone()).expect("library failed to save db_b");
+
+            for group in &mut db.root.groups {
+                if group.name == "Services" {
+                    group.custom_data.insert(
+                        "_LAST_MODIFIED".to_string(),
+                        CustomDataItem {
+                            value: Some(CustomDataValue::String(
+                                "Tue Jan  2 00:00:00 2024 GMT".to_string(),
+                            )),
+                            last_modification_time: None,
+                        },
+                    );
+                }
+            }
+
+            let mut out = File::create(&db_a).expect("failed to create db_a");
+            db.save(&mut out, key).expect("library failed to save db_a");
+        }
+
+        // Step 3 – verify both databases are valid and readable by keepassxc-cli.
+        let snapshot_a = export_snapshot(&binary, &db_a);
+        let snapshot_b = export_snapshot(&binary, &db_b);
+        assert_eq!(
+            snapshot_a, snapshot_b,
+            "snapshots should be identical except for _LAST_MODIFIED"
+        );
+
+        // Step 4 – attempt to merge DB_A into DB_B; should succeed.
+        let key = DatabaseKey::new().with_password(TEST_PASSWORD);
+        let mut f_a = File::open(&db_a).expect("failed to open db_a");
+        let db_a_loaded =
+            Database::open(&mut f_a, key.clone()).expect("library failed to open db_a");
+
+        let mut f_b = File::open(&db_b).expect("failed to open db_b");
+        let mut db_b_loaded =
+            Database::open(&mut f_b, key.clone()).expect("library failed to open db_b");
+
+        let result = db_b_loaded.merge(&db_a_loaded);
+        assert!(
+            result.is_ok(),
+            "merge should succeed but failed: {:?}",
+            result.unwrap_err()
+        );
+    }
+
     fn build_recycle_bin_fixture(binary: &OsString, db_path: &Path) -> FixtureExpectations {
         create_database(binary, db_path);
         add_entry(
