@@ -406,8 +406,13 @@ impl Database {
                     }
                 }
 
-                // skip updating entry data if it still matches
-                if !existing_entry.has_diverged_from(other_entry) {
+                // skip updating entry data if it still matches (content AND history)
+                // has_diverged_from() excludes history, so we also check history equality
+                // explicitly: history can diverge without a LMT bump (e.g. MaintainBackups)
+                // and must still be unioned in that case.
+                if !existing_entry.has_diverged_from(other_entry)
+                    && existing_entry.history == other_entry.history
+                {
                     continue;
                 }
 
@@ -793,7 +798,15 @@ impl Entry {
                     other.uuid.to_string(),
                 ));
             }
-            return Ok((None, log));
+            // Even with equal LMTs the two histories may differ: KeePass never bumps
+            // LastModificationTime for history-only changes (CreateBackup, MaintainBackups,
+            // manual deletion).  Always union the histories so nothing is silently dropped.
+            let (merged_entry, history_log) = self.merge_history(other, true)?;
+            log.append(&history_log);
+            if merged_entry.history == self.history {
+                return Ok((None, log));
+            }
+            return Ok((Some(merged_entry), log));
         }
 
         let (mut merged_entry, entry_merge_log) = match destination_last_modification > source_last_modification
@@ -898,6 +911,12 @@ impl Entry {
     //
     // `previous_parent_group` is excluded from the comparison: like `location_changed` it tracks
     // movement, not content, so a relocation should not be treated as a content divergence.
+    //
+    // `history` is excluded because KeePass never bumps LastModificationTime for history-only
+    // changes (CreateBackup, MaintainBackups, manual deletion).  Two entries can therefore
+    // legitimately share the same LMT while having different history lists; including history
+    // here would produce false EntryModificationTimeNotUpdated errors in that case.
+    // History divergences are resolved separately by always unioning the two lists.
     pub(crate) fn has_diverged_from(&self, other_entry: &Entry) -> bool {
         let new_times = Times::default();
 
@@ -908,11 +927,13 @@ impl Entry {
         // database (e.g. for TOTP entries) without bumping Times.LastModificationTime.
         // Treat this marker as a write-side artefact, not user-visible content change.
         self_without_times.custom_data.remove("_LAST_MODIFIED");
+        self_without_times.history = None;
 
         let mut other_without_times = other_entry.clone();
         other_without_times.times = new_times.clone();
         other_without_times.previous_parent_group = None;
         other_without_times.custom_data.remove("_LAST_MODIFIED");
+        other_without_times.history = None;
 
         !self_without_times.eq(&other_without_times)
     }
