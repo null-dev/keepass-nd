@@ -984,7 +984,13 @@ impl History {
         }
 
         for history_entry in &other.entries {
-            let modification_time = history_entry.times.last_modification.unwrap();
+            let modification_time = history_entry.times.last_modification.unwrap_or_else(|| {
+                log.warnings.push(format!(
+                    "Source history entry {} did not have a last modification timestamp",
+                    history_entry.uuid
+                ));
+                Times::epoch()
+            });
             let existing_history_entry = new_history_entries.get(&modification_time);
             if let Some(existing_history_entry) = existing_history_entry {
                 if existing_history_entry.has_diverged_from(history_entry) {
