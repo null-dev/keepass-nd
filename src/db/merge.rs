@@ -2282,6 +2282,103 @@ mod merge_tests {
     }
 
     // -----------------------------------------------------------------------
+    // History-only divergence with equal LastModificationTime
+    //
+    // KeePass never bumps LastModificationTime when history changes (e.g.
+    // MaintainBackups pruning, manual history deletion, or merge-induced
+    // CreateBackup calls).  Two copies of the same entry can therefore end up
+    // with identical LMTs but different history lists.  The merge algorithm
+    // must handle that gracefully instead of erroring out, and it must always
+    // union the two history lists regardless of whether LMTs differ.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_merge_history_deleted_same_lmt_does_not_error() {
+        // Build an entry with two committed states so that it has two history entries.
+        let mut entry = Entry::new();
+        entry.set_field_and_commit(fields::TITLE, "v1");
+        entry.set_field_and_commit(fields::TITLE, "v2");
+        // entry: LMT=T2, history = [{v2, T2}, {v1, T1}]  (most-recent first)
+
+        let source = entry.clone();
+
+        // Simulate the user deleting the oldest history entry on the destination side.
+        // KeePass does NOT bump LastModificationTime for this operation.
+        entry.history.as_mut().unwrap().entries.pop();
+        // dest: LMT=T2, history = [{v2, T2}]   (one entry removed, LMT unchanged)
+        // src:  LMT=T2, history = [{v2, T2}, {v1, T1}]
+
+        // Bug 1: has_diverged_from() compares history, so the merge currently
+        // returns Err(EntryModificationTimeNotUpdated) even though the content
+        // fields are identical and the LMT difference is legitimate.
+        let result = entry.merge(&source);
+        assert!(
+            result.is_ok(),
+            "merge should succeed when LMTs match but one side deleted a history entry; got {:?}",
+            result
+        );
+
+        // Bug 2: even after avoiding the error, the equal-LMT early-return path
+        // skips history merging entirely, so the deleted entry is never restored.
+        let (merged_opt, _) = result.unwrap();
+        let merged = merged_opt.expect("history-only difference should produce a merged entry");
+        assert_eq!(
+            merged.history.as_ref().unwrap().entries.len(),
+            2,
+            "the deleted history entry should be restored from the source"
+        );
+    }
+
+    #[test]
+    fn test_merge_history_from_source_propagated_when_lmts_match() {
+        // Build a database where both sides have the same entry at the same LMT,
+        // but the source has an extra history entry the destination is missing.
+        // This can happen after a merge cycle: KeePass calls CreateBackup() on the
+        // source (adding a history snapshot without bumping LMT), then only the
+        // source side retains that snapshot.
+        let mut destination_db = create_test_database();
+
+        // Give entry1 a second committed state so there is something in history.
+        {
+            let e = destination_db.root.entry_by_uuid_mut(ENTRY1_ID).unwrap();
+            e.set_field_and_commit(fields::TITLE, "v2");
+        }
+        // dest: LMT=T2, history = [{v2, T2}, {v1, T1}]
+
+        // Clone AFTER the commit so both sides start with identical LMTs.
+        let mut source_db = destination_db.clone();
+        // Both: LMT=T2, history = [{v2, T2}, {v1, T1}]
+
+        // Inject an extra history snapshot into source only, without touching LMT.
+        // (Represents a history entry added by a previous merge's CreateBackup call
+        // that only ended up in the source database.)
+        {
+            let e = source_db.root.entry_by_uuid_mut(ENTRY1_ID).unwrap();
+            let extra = {
+                let mut snap = e.clone();
+                snap.history = None;
+                snap.times.last_modification = Some(make_timestamp(1)); // very old snapshot
+                snap
+            };
+            e.history.as_mut().unwrap().entries.push(extra);
+        }
+        // dest: LMT=T2, history = 2 entries
+        // src:  LMT=T2, history = 3 entries  (extra synthetic snapshot)
+
+        // Bug 2: the equal-LMT early-return path never calls merge_history, so the
+        // extra source history entry is silently discarded.
+        let merge_result = destination_db.merge(&source_db).unwrap();
+        assert_eq!(merge_result.warnings.len(), 0);
+
+        let merged = destination_db.root.entry_by_uuid(ENTRY1_ID).unwrap();
+        assert_eq!(
+            merged.history.as_ref().unwrap().entries.len(),
+            3,
+            "the extra history entry present only in the source should be merged into destination"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Entry divergence logic: same timestamp + diverged content → error
     // -----------------------------------------------------------------------
 
