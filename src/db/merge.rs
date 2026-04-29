@@ -51,8 +51,6 @@ pub enum MergeError {
     #[error("Groups with UUID {0} have the same modification time but have diverged.")]
     GroupModificationTimeNotUpdated(String),
 
-    #[error("Found history entries with the same timestamp ({0}) for entry {1}.")]
-    DuplicateHistoryEntries(String, String),
 }
 
 impl MergeLog {
@@ -965,54 +963,71 @@ impl History {
         let mut log = MergeLog::default();
         let mut new_history_entries: HashMap<chrono::NaiveDateTime, Entry> = HashMap::new();
 
-        for history_entry in &self.entries {
-            let modification_time = history_entry.times.last_modification.unwrap_or_else(|| {
-                log.warnings.push(format!(
-                    "Destination history entry {} did not have a last modification timestamp",
-                    history_entry.uuid
-                ));
-                Times::epoch()
-            });
+        // Insert entries from a slice into the map, disambiguating duplicate mod times by
+        // incrementing colliding timestamps by 1s in source order.
+        let collect_disambiguated = |entries: &[Entry],
+                                     side: &str,
+                                     map: &mut HashMap<chrono::NaiveDateTime, Entry>,
+                                     log: &mut MergeLog| {
+            for history_entry in entries {
+                let base_time = history_entry.times.last_modification.unwrap_or_else(|| {
+                    log.warnings.push(format!(
+                        "{} history entry {} did not have a last modification timestamp",
+                        side, history_entry.uuid
+                    ));
+                    Times::epoch()
+                });
 
-            if new_history_entries.contains_key(&modification_time) {
-                return Err(MergeError::DuplicateHistoryEntries(
-                    modification_time.to_string(),
-                    history_entry.uuid.to_string(),
-                ));
+                let mut t = base_time;
+                while map.contains_key(&t) {
+                    log.warnings.push(format!(
+                        "Duplicate history entry timestamp {} for entry {}, incrementing by 1s",
+                        t, history_entry.uuid
+                    ));
+                    t += chrono::Duration::seconds(1);
+                }
+                let mut repaired = history_entry.clone();
+                repaired.times.last_modification = Some(t);
+                map.insert(t, repaired);
             }
-            new_history_entries.insert(modification_time, history_entry.clone());
-        }
+        };
+
+        collect_disambiguated(&self.entries, "Destination", &mut new_history_entries, &mut log);
 
         for history_entry in &other.entries {
-            let modification_time = history_entry.times.last_modification.unwrap_or_else(|| {
+            let base_time = history_entry.times.last_modification.unwrap_or_else(|| {
                 log.warnings.push(format!(
                     "Source history entry {} did not have a last modification timestamp",
                     history_entry.uuid
                 ));
                 Times::epoch()
             });
-            let existing_history_entry = new_history_entries.get(&modification_time);
-            if let Some(existing_history_entry) = existing_history_entry {
-                if existing_history_entry.has_diverged_from(history_entry) {
-                    log.warnings.push(format!(
-                        "History entries for {} have the same modification timestamp but were not the same.",
-                        existing_history_entry.uuid
-                    ));
+
+            let mut t = base_time;
+            while let Some(existing) = new_history_entries.get(&t) {
+                if existing.has_diverged_from(history_entry) {
+                    // Slot is occupied by a different entry; advance to the next free second.
+                    t += chrono::Duration::seconds(1);
+                } else {
+                    // Same content already present; skip.
+                    break;
                 }
-            } else {
-                new_history_entries.insert(modification_time, history_entry.clone());
+            }
+            if !new_history_entries.contains_key(&t) {
+                let mut repaired = history_entry.clone();
+                repaired.times.last_modification = Some(t);
+                new_history_entries.insert(t, repaired);
             }
         }
 
-        let mut all_modification_times: Vec<&chrono::NaiveDateTime> = new_history_entries.keys().collect();
+        let mut all_modification_times: Vec<chrono::NaiveDateTime> =
+            new_history_entries.keys().cloned().collect();
         all_modification_times.sort();
         all_modification_times.reverse();
-        let mut new_entries: Vec<Entry> = vec![];
-        for modification_time in &all_modification_times {
-            new_entries.push(new_history_entries.get(modification_time).unwrap().clone());
-        }
-
-        self.entries = new_entries;
+        self.entries = all_modification_times
+            .into_iter()
+            .map(|t| new_history_entries.remove(&t).unwrap())
+            .collect();
         Ok(log)
     }
 }
