@@ -961,74 +961,66 @@ impl History {
     // Merge both histories together.
     pub(crate) fn merge_with(&mut self, other: &History) -> Result<MergeLog, MergeError> {
         let mut log = MergeLog::default();
-        let mut new_history_entries: HashMap<chrono::NaiveDateTime, Entry> = HashMap::new();
 
-        // Insert entries from a slice into the map, disambiguating duplicate mod times by
-        // incrementing colliding timestamps by 1s in source order.
-        let collect_disambiguated = |entries: &[Entry],
-                                     side: &str,
-                                     map: &mut HashMap<chrono::NaiveDateTime, Entry>,
-                                     log: &mut MergeLog| {
-            for history_entry in entries {
-                let base_time = history_entry.times.last_modification.unwrap_or_else(|| {
-                    log.warnings.push(format!(
-                        "{} history entry {} did not have a last modification timestamp",
-                        side, history_entry.uuid
-                    ));
-                    Times::epoch()
-                });
+        // Disambiguate each side independently into its own map, then merge the two maps.
+        // Keeping the sides separate ensures A→B and B→A produce the same result.
+        let mut dst = History::disambiguate_entries(&self.entries, "Destination", &mut log);
+        let src = History::disambiguate_entries(&other.entries, "Source", &mut log);
 
-                let mut t = base_time;
-                while map.contains_key(&t) {
+        for (t, src_entry) in src {
+            if let Some(existing) = dst.get(&t) {
+                if existing.has_diverged_from(&src_entry) {
                     log.warnings.push(format!(
-                        "Duplicate history entry timestamp {} for entry {}, incrementing by 1s",
-                        t, history_entry.uuid
+                        "History entries for {} have the same modification timestamp but were not the same.",
+                        existing.uuid
                     ));
-                    t += chrono::Duration::seconds(1);
                 }
-                let mut repaired = history_entry.clone();
-                repaired.times.last_modification = Some(t);
-                map.insert(t, repaired);
+                // Destination wins; src_entry is discarded.
+            } else {
+                dst.insert(t, src_entry);
             }
-        };
+        }
 
-        collect_disambiguated(&self.entries, "Destination", &mut new_history_entries, &mut log);
+        let mut all_modification_times: Vec<chrono::NaiveDateTime> = dst.keys().cloned().collect();
+        all_modification_times.sort();
+        all_modification_times.reverse();
+        self.entries = all_modification_times
+            .into_iter()
+            .map(|t| dst.remove(&t).unwrap())
+            .collect();
+        Ok(log)
+    }
 
-        for history_entry in &other.entries {
+    // Builds a timestamp→entry map from a slice, repairing within-list duplicate mod times by
+    // incrementing colliding timestamps by 1s in source order.
+    fn disambiguate_entries(
+        entries: &[Entry],
+        side: &str,
+        log: &mut MergeLog,
+    ) -> HashMap<chrono::NaiveDateTime, Entry> {
+        let mut map: HashMap<chrono::NaiveDateTime, Entry> = HashMap::new();
+        for history_entry in entries {
             let base_time = history_entry.times.last_modification.unwrap_or_else(|| {
                 log.warnings.push(format!(
-                    "Source history entry {} did not have a last modification timestamp",
-                    history_entry.uuid
+                    "{} history entry {} did not have a last modification timestamp",
+                    side, history_entry.uuid
                 ));
                 Times::epoch()
             });
 
             let mut t = base_time;
-            while let Some(existing) = new_history_entries.get(&t) {
-                if existing.has_diverged_from(history_entry) {
-                    // Slot is occupied by a different entry; advance to the next free second.
-                    t += chrono::Duration::seconds(1);
-                } else {
-                    // Same content already present; skip.
-                    break;
-                }
+            while map.contains_key(&t) {
+                log.warnings.push(format!(
+                    "Duplicate history entry timestamp {} for entry {}, incrementing by 1s",
+                    t, history_entry.uuid
+                ));
+                t += chrono::Duration::seconds(1);
             }
-            if !new_history_entries.contains_key(&t) {
-                let mut repaired = history_entry.clone();
-                repaired.times.last_modification = Some(t);
-                new_history_entries.insert(t, repaired);
-            }
+            let mut repaired = history_entry.clone();
+            repaired.times.last_modification = Some(t);
+            map.insert(t, repaired);
         }
-
-        let mut all_modification_times: Vec<chrono::NaiveDateTime> =
-            new_history_entries.keys().cloned().collect();
-        all_modification_times.sort();
-        all_modification_times.reverse();
-        self.entries = all_modification_times
-            .into_iter()
-            .map(|t| new_history_entries.remove(&t).unwrap())
-            .collect();
-        Ok(log)
+        map
     }
 }
 
