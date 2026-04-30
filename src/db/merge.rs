@@ -1009,12 +1009,14 @@ impl History {
             });
 
             let mut t = base_time;
-            while map.contains_key(&t) {
+            if map.contains_key(&t) {
                 log.warnings.push(format!(
-                    "Duplicate history entry timestamp {} for entry {}, incrementing by 1s",
+                    "Duplicate history entry timestamp {} for entry {}, timestamp will be incremented",
                     t, history_entry.uuid
                 ));
-                t += chrono::Duration::seconds(1);
+                while map.contains_key(&t) {
+                    t += chrono::Duration::seconds(1);
+                }
             }
             let mut repaired = history_entry.clone();
             repaired.times.last_modification = Some(t);
