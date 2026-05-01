@@ -51,8 +51,6 @@ pub enum MergeError {
     #[error("Groups with UUID {0} have the same modification time but have diverged.")]
     GroupModificationTimeNotUpdated(String),
 
-    #[error("Found history entries with the same timestamp ({0}) for entry {1}.")]
-    DuplicateHistoryEntries(String, String),
 }
 
 impl MergeLog {
@@ -963,57 +961,68 @@ impl History {
     // Merge both histories together.
     pub(crate) fn merge_with(&mut self, other: &History) -> Result<MergeLog, MergeError> {
         let mut log = MergeLog::default();
-        let mut new_history_entries: HashMap<chrono::NaiveDateTime, Entry> = HashMap::new();
 
-        for history_entry in &self.entries {
-            let modification_time = history_entry.times.last_modification.unwrap_or_else(|| {
-                log.warnings.push(format!(
-                    "Destination history entry {} did not have a last modification timestamp",
-                    history_entry.uuid
-                ));
-                Times::epoch()
-            });
+        // Disambiguate each side independently into its own map, then merge the two maps.
+        // Keeping the sides separate ensures A→B and B→A produce the same result.
+        let mut dst = History::disambiguate_entries(&self.entries, "Destination", &mut log);
+        let src = History::disambiguate_entries(&other.entries, "Source", &mut log);
 
-            if new_history_entries.contains_key(&modification_time) {
-                return Err(MergeError::DuplicateHistoryEntries(
-                    modification_time.to_string(),
-                    history_entry.uuid.to_string(),
-                ));
-            }
-            new_history_entries.insert(modification_time, history_entry.clone());
-        }
-
-        for history_entry in &other.entries {
-            let modification_time = history_entry.times.last_modification.unwrap_or_else(|| {
-                log.warnings.push(format!(
-                    "Source history entry {} did not have a last modification timestamp",
-                    history_entry.uuid
-                ));
-                Times::epoch()
-            });
-            let existing_history_entry = new_history_entries.get(&modification_time);
-            if let Some(existing_history_entry) = existing_history_entry {
-                if existing_history_entry.has_diverged_from(history_entry) {
+        for (t, src_entry) in src {
+            if let Some(existing) = dst.get(&t) {
+                if existing.has_diverged_from(&src_entry) {
                     log.warnings.push(format!(
                         "History entries for {} have the same modification timestamp but were not the same.",
-                        existing_history_entry.uuid
+                        existing.uuid
                     ));
                 }
+                // Destination wins; src_entry is discarded.
             } else {
-                new_history_entries.insert(modification_time, history_entry.clone());
+                dst.insert(t, src_entry);
             }
         }
 
-        let mut all_modification_times: Vec<&chrono::NaiveDateTime> = new_history_entries.keys().collect();
+        let mut all_modification_times: Vec<chrono::NaiveDateTime> = dst.keys().cloned().collect();
         all_modification_times.sort();
         all_modification_times.reverse();
-        let mut new_entries: Vec<Entry> = vec![];
-        for modification_time in &all_modification_times {
-            new_entries.push(new_history_entries.get(modification_time).unwrap().clone());
-        }
-
-        self.entries = new_entries;
+        self.entries = all_modification_times
+            .into_iter()
+            .map(|t| dst.remove(&t).unwrap())
+            .collect();
         Ok(log)
+    }
+
+    // Builds a timestamp→entry map from a slice, repairing within-list duplicate mod times by
+    // incrementing colliding timestamps by 1s in source order.
+    fn disambiguate_entries(
+        entries: &[Entry],
+        side: &str,
+        log: &mut MergeLog,
+    ) -> HashMap<chrono::NaiveDateTime, Entry> {
+        let mut map: HashMap<chrono::NaiveDateTime, Entry> = HashMap::new();
+        for history_entry in entries {
+            let base_time = history_entry.times.last_modification.unwrap_or_else(|| {
+                log.warnings.push(format!(
+                    "{} history entry {} did not have a last modification timestamp",
+                    side, history_entry.uuid
+                ));
+                Times::epoch()
+            });
+
+            let mut t = base_time;
+            if map.contains_key(&t) {
+                log.warnings.push(format!(
+                    "Duplicate history entry timestamp {} for entry {}, timestamp will be incremented",
+                    t, history_entry.uuid
+                ));
+                while map.contains_key(&t) {
+                    t += chrono::Duration::seconds(1);
+                }
+            }
+            let mut repaired = history_entry.clone();
+            repaired.times.last_modification = Some(t);
+            map.insert(t, repaired);
+        }
+        map
     }
 }
 
@@ -1022,7 +1031,7 @@ mod merge_tests {
     use std::{thread, time};
     use uuid::{uuid, Uuid};
 
-    use crate::db::{fields, Entry, Group, Times};
+    use crate::db::{fields, Entry, Group, History, Times};
     use crate::Database;
 
     fn get_all_groups(parent: &Group) -> Vec<&Group> {
@@ -2795,5 +2804,205 @@ mod merge_tests {
 
         // Nothing should change after merging with an identical database
         assert_eq!(destination_db, source_db);
+    }
+
+    // -----------------------------------------------------------------------
+    // History::merge_with – duplicate timestamp disambiguation
+    // -----------------------------------------------------------------------
+
+    fn make_entry_with_title_and_time(title: &str, t: chrono::NaiveDateTime) -> Entry {
+        let mut e = Entry::new();
+        e.times.last_modification = Some(t);
+        e.set_unprotected(fields::TITLE, title);
+        e
+    }
+
+    fn make_history(entries: Vec<Entry>) -> History {
+        let mut h = History::default();
+        h.entries = entries;
+        h
+    }
+
+    #[test]
+    fn test_history_merge_dst_duplicates_are_repaired() {
+        // Destination has two entries sharing the same mod time.
+        // After merge both entries survive with distinct timestamps.
+        let t = make_timestamp(1000);
+        let mut dst = make_history(vec![
+            make_entry_with_title_and_time("a", t),
+            make_entry_with_title_and_time("b", t),
+        ]);
+        let src = History::default();
+
+        let log = dst.merge_with(&src).unwrap();
+
+        assert_eq!(dst.entries.len(), 2, "both entries should survive repair");
+        let times: std::collections::HashSet<_> = dst
+            .entries
+            .iter()
+            .map(|e| e.times.last_modification.unwrap())
+            .collect();
+        assert_eq!(times.len(), 2, "timestamps should be distinct after repair");
+
+        // Warning emitted exactly once for the one colliding entry.
+        let dup_warnings = log
+            .warnings
+            .iter()
+            .filter(|w| w.contains("Duplicate"))
+            .count();
+        assert_eq!(dup_warnings, 1);
+    }
+
+    #[test]
+    fn test_history_merge_src_duplicates_are_repaired() {
+        // Source has two entries sharing the same mod time; destination is empty.
+        let t = make_timestamp(2000);
+        let mut dst = History::default();
+        let src = make_history(vec![
+            make_entry_with_title_and_time("a", t),
+            make_entry_with_title_and_time("b", t),
+        ]);
+
+        let log = dst.merge_with(&src).unwrap();
+
+        assert_eq!(dst.entries.len(), 2);
+        let times: std::collections::HashSet<_> = dst
+            .entries
+            .iter()
+            .map(|e| e.times.last_modification.unwrap())
+            .collect();
+        assert_eq!(times.len(), 2);
+
+        let dup_warnings = log
+            .warnings
+            .iter()
+            .filter(|w| w.contains("Duplicate"))
+            .count();
+        assert_eq!(dup_warnings, 1);
+    }
+
+    #[test]
+    fn test_history_merge_duplicate_warning_emitted_once_per_entry() {
+        // Three entries all at the same timestamp → two warnings (one per entry
+        // after the first), never once-per-increment-step.
+        let t = make_timestamp(3000);
+        let mut dst = make_history(vec![
+            make_entry_with_title_and_time("a", t),
+            make_entry_with_title_and_time("b", t),
+            make_entry_with_title_and_time("c", t),
+        ]);
+
+        let log = dst.merge_with(&History::default()).unwrap();
+
+        assert_eq!(dst.entries.len(), 3);
+        let times: std::collections::HashSet<_> = dst
+            .entries
+            .iter()
+            .map(|e| e.times.last_modification.unwrap())
+            .collect();
+        assert_eq!(times.len(), 3, "all three timestamps should be distinct");
+
+        // Entries "b" and "c" each collide; "a" does not — so exactly 2 warnings.
+        let dup_warnings = log
+            .warnings
+            .iter()
+            .filter(|w| w.contains("Duplicate"))
+            .count();
+        assert_eq!(
+            dup_warnings, 2,
+            "expected one warning per colliding entry, not per increment step"
+        );
+    }
+
+    #[test]
+    fn test_history_merge_sides_disambiguated_independently() {
+        // Dst has two entries at T (duplicate); src has one entry at T+1.
+        //
+        // Dst is disambiguated to {T, T+1} first.  The src entry at T+1 then
+        // collides with dst's repaired entry — dst wins — so the final result
+        // contains exactly 2 entries (both from dst).
+        //
+        // This verifies that the two sides are resolved independently before
+        // any cross-side comparison, which is what makes the merge direction-
+        // independent.
+        let t = make_timestamp(4000);
+        let t1 = make_timestamp(4001);
+
+        let mut dst = make_history(vec![
+            make_entry_with_title_and_time("dst_a", t),
+            make_entry_with_title_and_time("dst_b", t), // duplicate → will be bumped to t1
+        ]);
+        let src = make_history(vec![
+            make_entry_with_title_and_time("src", t1), // collides with dst_b after repair
+        ]);
+
+        dst.merge_with(&src).unwrap();
+
+        assert_eq!(
+            dst.entries.len(),
+            2,
+            "dst duplicate is repaired and src collision is handled by dst-wins rule"
+        );
+        let times: std::collections::HashSet<_> = dst
+            .entries
+            .iter()
+            .map(|e| e.times.last_modification.unwrap())
+            .collect();
+        assert!(times.contains(&t), "original dst entry at T should be present");
+        assert!(
+            times.contains(&t1),
+            "repaired dst entry at T+1 should be present"
+        );
+        // Verify dst content wins at t1.
+        let entry_at_t1 = dst
+            .entries
+            .iter()
+            .find(|e| e.times.last_modification == Some(t1))
+            .unwrap();
+        assert_eq!(
+            entry_at_t1.get_title(),
+            Some("dst_b"),
+            "dst entry should win the collision at T+1"
+        );
+    }
+
+    #[test]
+    fn test_history_merge_cross_side_same_content_deduplicates() {
+        // When both sides have an entry at the same timestamp with the same
+        // content, no duplicate is inserted and no warning is emitted.
+        let t = make_timestamp(5000);
+        let entry = make_entry_with_title_and_time("shared", t);
+
+        let mut dst = make_history(vec![entry.clone()]);
+        let src = make_history(vec![entry]);
+
+        let log = dst.merge_with(&src).unwrap();
+
+        assert_eq!(dst.entries.len(), 1, "duplicate content should be deduped");
+        assert!(
+            log.warnings.is_empty(),
+            "no warning expected for identical content"
+        );
+    }
+
+    #[test]
+    fn test_history_merge_cross_side_different_content_warns_and_dst_wins() {
+        // When both sides have entries at the same timestamp but with different
+        // content, a warning is emitted and the destination entry is kept.
+        let t = make_timestamp(6000);
+
+        let mut dst = make_history(vec![make_entry_with_title_and_time("dst", t)]);
+        let src = make_history(vec![make_entry_with_title_and_time("src", t)]);
+
+        let log = dst.merge_with(&src).unwrap();
+
+        assert_eq!(dst.entries.len(), 1);
+        assert_eq!(dst.entries[0].get_title(), Some("dst"), "dst should win");
+        let divergence_warnings = log
+            .warnings
+            .iter()
+            .filter(|w| w.contains("same modification timestamp but were not the same"))
+            .count();
+        assert_eq!(divergence_warnings, 1);
     }
 }
